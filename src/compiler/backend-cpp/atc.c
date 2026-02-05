@@ -226,23 +226,23 @@ static void emit_expression(FILE* out, ASTNode* node) {
             break;
         }
         case AST_INDEX: {
-            /* index from 0 based */
-            /* 如果索引是标识符 => 结构体字段访问：a.field 或 a.length */
             if (node->data.index.index && node->data.index.index->type == AST_IDENTIFIER) {
                 const char* field_name = node->data.index.index->data.identifier.name;
                 if (strcmp(field_name, "length") == 0) {
                     fprintf(out, "(");
                     emit_expression(out, node->data.index.target);
                     fprintf(out, ").items.size()");
-                } else {//将 a[name] 形式的标识符索引视为结构体字段访问 a.name
+                } else {
                     fprintf(out, "(");
                     emit_expression(out, node->data.index.target);
-                    fprintf(out, ").%s", field_name);
+                    fprintf(out, ").items[");
+                    emit_expression(out, node->data.index.index);
+                    fprintf(out, "]");
                 }
             } else {
                 fprintf(out, "(");
                 emit_expression(out, node->data.index.target);
-                fprintf(out, ")[");
+                fprintf(out, ").items[");
                 emit_expression(out, node->data.index.index);
                 fprintf(out, "]");
             }
@@ -595,11 +595,43 @@ static void compile_for(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, 
     /* foreach: if end == null iterate by index from 0..start.size()-1 */
     if (node->data.for_stmt.end == NULL) {
         fprintf(out, "    {\n");
-        fprintf(out, "        auto __iter = ");
-        emit_expression(out, node->data.for_stmt.start);
-        fprintf(out, ";\n");
-        fprintf(out, "        for(size_t __idx = 0; __idx < __iter.size(); __idx++) {\n");
-        fprintf(out, "            auto %s = __iter[__idx];\n", loop_var_name);
+        ASTNode* start = node->data.for_stmt.start;
+        if (start->type == AST_IDENTIFIER && ctx) {
+            const char* ident_name = start->data.identifier.name;
+            InferredType inferred_type = get_variable_type(ctx, ident_name);
+            
+            if (inferred_type == TYPE_STRING) {
+                fprintf(out, "        vtypes::VString __iter = %s;\n", ident_name);
+                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.size(); __idx++) {\n");
+                fprintf(out, "            auto %s = __iter[__idx];\n", loop_var_name);
+            } else if (inferred_type == TYPE_LIST) {
+                fprintf(out, "        vtypes::VList __iter = %s;\n", ident_name);
+                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.items.size(); __idx++) {\n");
+                fprintf(out, "            auto %s = __iter.items[__idx];\n", loop_var_name);
+            } else {
+                fprintf(out, "        auto __iter = %s;\n", ident_name);
+                fprintf(out, "        for(size_t __idx = 0; __idx < __iter; __idx++) {\n");
+                fprintf(out, "            auto %s = __idx;\n", loop_var_name);
+            }
+        } else {
+            InferredType expr_type = ctx ? infer_type(ctx, start) : TYPE_UNKNOWN;
+            
+            fprintf(out, "        auto __iter = ");
+            emit_expression(out, start);
+            fprintf(out, ";\n");
+            
+            if (expr_type == TYPE_LIST) {
+                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.items.size(); __idx++) {\n");
+                fprintf(out, "            auto %s = __iter.items[__idx];\n", loop_var_name);
+            } else if (expr_type == TYPE_STRING) {
+                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.size(); __idx++) {\n");
+                fprintf(out, "            auto %s = __iter[__idx];\n", loop_var_name);
+            } else {
+                fprintf(out, "        for(size_t __idx = 0; __idx < __iter; __idx++) {\n");
+                fprintf(out, "            auto %s = __idx;\n", loop_var_name);
+            }
+        }
+        
         compile_node(gen, ctx, out, decl, node->data.for_stmt.body);
         fprintf(out, "        }\n");
         fprintf(out, "    }\n");
