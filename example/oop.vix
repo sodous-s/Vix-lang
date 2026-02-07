@@ -1,0 +1,26 @@
+obj fn PersonA(age:i32,name:string)
+{
+    field age = age
+    field name = name
+    meth hello(self)
+    {
+        print("ciallo ! my name is " + self.name)
+    }
+    meth out_age(self)
+    {
+        print("I am " + self.age + " years old")
+    }
+
+}
+impl PersonA:public
+{
+    hello as greeting,
+    out_age as age
+}
+fn main() ->i32
+{
+    obj p = PersonA(20,"john")
+    p.greeting()
+    p.age()
+    return 0
+}
