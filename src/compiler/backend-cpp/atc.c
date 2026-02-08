@@ -1,4 +1,5 @@
 #include "../include/compiler.h"
+#include "../include/ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,12 +10,12 @@ static void emit_expression(FILE* out, ASTNode* node);
 static void compile_node(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
 static void compile_program(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
 static void compile_print(FILE* out, ASTNode* node);
-static void compile_assign(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
+static void compile_assign(TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
 static void compile_const(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
 static void compile_if(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
 static void compile_function(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node);
 static int check_function_has_return(ASTNode* node);
-static const char* node_type_to_cpp_string(NodeType t, const char* type_name);
+static const char* get_param_type_string(TypeInferenceContext* ctx, ASTNode* param);
 static void compile_struct_def(FILE* out, ASTNode* node);
 static void emit_expression_with_context(FILE* out, ASTNode* node, int in_struct_literal) {
     if (!node) { fprintf(out, "/*null*/0"); return; }
@@ -157,17 +158,35 @@ static void emit_expression_with_context(FILE* out, ASTNode* node, int in_struct
                     }
                     fprintf(out, "))");
                 } else if (strcmp(mname, "push") == 0) {
-                    /* obj.push(val) -> (target).push_inplace(to_vstring(val))*/
-                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").push_inplace(vconvert::to_vstring(");
+                    /* obj.push(val) -> (target).push(to_vstring(val)) */
+                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").push(vconvert::to_vstring(");
                     if (node->data.call.args && node->data.call.args->type == AST_EXPRESSION_LIST && node->data.call.args->data.expression_list.expression_count > 0) {
                         emit_expression_with_context(out, node->data.call.args->data.expression_list.expressions[0], in_struct_literal);
                     } else {
                         fprintf(out, "\"\"");
                     }
                     fprintf(out, "))");
+                } else if (strcmp(mname, "pop") == 0) {
+                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").pop()");
+                } else if (strcmp(mname, "pop!") == 0) {
+                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").pop_inplace()");
+                } else if (strcmp(mname, "replace!") == 0) {
+                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").replace_inplace((size_t)(");
+                    if (node->data.call.args && node->data.call.args->type == AST_EXPRESSION_LIST && node->data.call.args->data.expression_list.expression_count > 0) {
+                        emit_expression_with_context(out, node->data.call.args->data.expression_list.expressions[0], in_struct_literal);
+                    } else {
+                        fprintf(out, "0");
+                    }
+                    fprintf(out, "), vconvert::to_vstring(");
+                    if (node->data.call.args && node->data.call.args->type == AST_EXPRESSION_LIST && node->data.call.args->data.expression_list.expression_count > 1) {
+                        emit_expression_with_context(out, node->data.call.args->data.expression_list.expressions[1], in_struct_literal);
+                    } else {
+                        fprintf(out, "\"\"");
+                    }
+                    fprintf(out, "))");
                 } else if (strcmp(mname, "insert!") == 0) {
-                    /* obj.insert!(idx, val) -> (target).insert_inplace((size_t)idx, to_vstring(val)) */
-                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").insert_inplace((size_t)(");
+                    /* obj.insert!(idx, val) -> (target).add_inplace((size_t)idx, to_vstring(val)) */
+                    fprintf(out, "("); emit_expression_with_context(out, target, in_struct_literal); fprintf(out, ").add_inplace((size_t)(");
                     if (node->data.call.args && node->data.call.args->type == AST_EXPRESSION_LIST && node->data.call.args->data.expression_list.expression_count > 0) {
                         emit_expression_with_context(out, node->data.call.args->data.expression_list.expressions[0], in_struct_literal);
                     } else {
@@ -220,23 +239,29 @@ static void emit_expression_with_context(FILE* out, ASTNode* node, int in_struct
             break;
         }
         case AST_INDEX: {
+            // 检查是否是特定的字段访问（如 .length）
             if (node->data.index.index && node->data.index.index->type == AST_IDENTIFIER) {
                 const char* field_name = node->data.index.index->data.identifier.name;
+                // 只有特定的字段名才进行字段访问
                 if (strcmp(field_name, "length") == 0) {
                     fprintf(out, "(");
                     emit_expression_with_context(out, node->data.index.target, in_struct_literal);
                     fprintf(out, ").items.size()");
                 } else {
+                    // 其他情况都视为数组索引访问
                     fprintf(out, "(");
                     emit_expression_with_context(out, node->data.index.target, in_struct_literal);
-                    fprintf(out, ").%s", field_name);
+                    fprintf(out, ").items.at(");
+                    emit_expression_with_context(out, node->data.index.index, in_struct_literal);
+                    fprintf(out, ")");
                 }
             } else {
+                // 数组索引访问，使用.at()进行边界检查
                 fprintf(out, "(");
                 emit_expression_with_context(out, node->data.index.target, in_struct_literal);
-                fprintf(out, ")[");
+                fprintf(out, ").items.at(");
                 emit_expression_with_context(out, node->data.index.index, in_struct_literal);
-                fprintf(out, "]");
+                fprintf(out, ")");
             }
             break;
         }
@@ -426,128 +451,91 @@ static void compile_print(FILE* out, ASTNode* node) {
     }
 }
 
-static void compile_assign(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node) {
+static void compile_assign(TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node) {
     ASTNode* left = node->data.assign.left;
     ASTNode* right = node->data.assign.right;
-    /* 支持结构体字段赋值：obj.field = expr */
-    if (left->type == AST_INDEX && left->data.index.index && left->data.index.index->type == AST_IDENTIFIER) {
+    if (left->type == AST_INDEX) {
+        if (left->data.index.index && left->data.index.index->type == AST_IDENTIFIER) {
+            const char* field_name = left->data.index.index->data.identifier.name;
+            if (strcmp(field_name, "length") == 0) {
+                fprintf(out, "    // Error: 'length' field is read-only\n");
+                return;
+            }
+        }
         fprintf(out, "    ");
         emit_expression(out, left->data.index.target);
-        fprintf(out, ".%s = ", left->data.index.index->data.identifier.name);
+        fprintf(out, ".items.at(");
+        emit_expression(out, left->data.index.index);
+        fprintf(out, ") = ");
         emit_expression(out, right);
         fprintf(out, ";\n");
         return;
     }
-    if (left->type == AST_UNARYOP && left->data.unaryop.op == OP_DEREF) {
-        fprintf(out, "    ");
-        fprintf(out, "(*(");
-        emit_expression(out, left->data.unaryop.expr);
-        fprintf(out, ")) = ");
-        emit_expression(out, right);
-        fprintf(out, ";\n");
-        return;
-    }
+    
     if (left->type != AST_IDENTIFIER) return;
     const char* name = left->data.identifier.name;
-    int idx = get_variable_index(gen, name);
+    int var_index = -1;
+    unsigned int hash = 0;
+    for (const char* p = name; *p; p++) {
+        hash = hash * 31 + *p;
+    }
+    var_index = hash % MAX_VARS;
     InferredType t = ctx ? get_variable_type(ctx, name) : TYPE_UNKNOWN;
     const char* tstr = type_to_cpp_string(t);
-
+    int is_void_call = 0;
+    if (right->type == AST_CALL && right->data.call.func->type == AST_INDEX) {
+        ASTNode* method = right->data.call.func->data.index.index;
+        if (method && method->type == AST_IDENTIFIER) {
+            const char* mname = method->data.identifier.name;
+            if (strcmp(mname, "add!") == 0 || 
+                strcmp(mname, "push!") == 0 || 
+                strcmp(mname, "replace!") == 0 || 
+                strcmp(mname, "insert!") == 0) {
+                is_void_call = 1;
+            }
+        }
+    }
+    
     if (right->type == AST_INPUT) {
-        if (idx >= 0 && idx < MAX_VARS) {
-            if (!decl[idx]) {
-                if (t != TYPE_UNKNOWN) {
-                    fprintf(out, "    %s %s;\n", tstr, name);
-                } else {
-                    fprintf(out, "    VString %s;\n", name);
-                }
-                decl[idx] = 1;
-            }
-            fprintf(out, "    {\n");
-            fprintf(out, "        std::string __in_tmp;\n");
-            if (right->data.input.prompt) {
-                fprintf(out, "        std::cout << to_vstring(");
-                emit_expression(out, right->data.input.prompt);
-                fprintf(out, ");\n");
-            }
-            fprintf(out, "        std::getline(std::cin, __in_tmp);\n");
-            fprintf(out, "        %s = to_vstring(__in_tmp);\n", name);
-            fprintf(out, "    }\n");
-        } else {
+        if (var_index >= 0 && var_index < MAX_VARS && !decl[var_index]) {
             if (t != TYPE_UNKNOWN) {
                 fprintf(out, "    %s %s;\n", tstr, name);
             } else {
                 fprintf(out, "    VString %s;\n", name);
             }
-            fprintf(out, "    {\n");
-            fprintf(out, "        std::string __in_tmp;\n");
-            if (right->data.input.prompt) {
-                fprintf(out, "        std::cout << to_vstring(");
-                emit_expression(out, right->data.input.prompt);
-                fprintf(out, ");\n");
-            }
-            fprintf(out, "        std::getline(std::cin, __in_tmp);\n");
-            fprintf(out, "        %s = to_vstring(__in_tmp);\n", name);
-            fprintf(out, "    }\n");
+            decl[var_index] = 1;
         }
+        fprintf(out, "    {\n");
+        fprintf(out, "        std::string __in_tmp;\n");
+        if (right->data.input.prompt) {
+            fprintf(out, "        std::cout << to_vstring(");
+            emit_expression(out, right->data.input.prompt);
+            fprintf(out, ");\n");
+        }
+        fprintf(out, "        std::getline(std::cin, __in_tmp);\n");
+        fprintf(out, "        %s = to_vstring(__in_tmp);\n", name);
+        fprintf(out, "    }\n");
         return;
     }
-    
-    if (idx >= 0 && idx < MAX_VARS) {
-        if (!decl[idx]) {// 检测是否是取地址操作，如果是则声明为指针类型
-            if (right->type == AST_UNARYOP && right->data.unaryop.op == OP_ADDRESS) {
-                fprintf(out, "    auto %s = ", name);//偷懒
-                emit_expression(out, right);
-                fprintf(out, ";\n");
-            } else if (right->type == AST_UNARYOP && right->data.unaryop.op == OP_DEREF) {
-                fprintf(out, "    auto %s = ", name);
-                emit_expression(out, right);
-                fprintf(out, ";\n");
-            } else {
-                if (t != TYPE_UNKNOWN) {
-                    fprintf(out, "    %s %s = ", tstr, name);
-                    if ((t == TYPE_INT) && right->type == AST_STRING) {
-                        fprintf(out, "to_int(");
-                        emit_expression(out, right);
-                        fprintf(out, ")");
-                    } else if ((t == TYPE_FLOAT) && right->type == AST_STRING) {
-                        fprintf(out, "to_double(");
-                        emit_expression(out, right);
-                        fprintf(out, ")");
-                    } else if ((t == TYPE_STRING) && (right->type == AST_NUM_INT || right->type == AST_NUM_FLOAT)) {
-                        fprintf(out, "to_vstring(");
-                        emit_expression(out, right);
-                        fprintf(out, ")");
-                    } else {
-                        emit_expression(out, right);
-                    }
-                    fprintf(out, ";\n");
-                } else {
-                    fprintf(out, "    auto %s = ", name);
-                    emit_expression(out, right);
-                    fprintf(out, ";\n");
-                }
-            }
-            decl[idx] = 1;
+    if (is_void_call) {
+        fprintf(out, "    ");
+        emit_expression(out, right);
+        fprintf(out, ";\n");
+        return;
+    }
+    if (var_index >= 0 && var_index < MAX_VARS && !decl[var_index]) {
+        if (t != TYPE_UNKNOWN) {
+            fprintf(out, "    %s %s = ", tstr, name);
         } else {
-            fprintf(out, "    %s = ", name);
-            emit_expression(out, right);
-            fprintf(out, ";\n");
+            fprintf(out, "    auto %s = ", name);
         }
+        emit_expression(out, right);
+        fprintf(out, ";\n");
+        decl[var_index] = 1;
     } else {
-        if (right->type == AST_UNARYOP && right->data.unaryop.op == OP_ADDRESS) {
-            fprintf(out, "    auto %s = ", name);
-            emit_expression(out, right);
-            fprintf(out, ";\n");
-        } else if (right->type == AST_UNARYOP && right->data.unaryop.op == OP_DEREF) {
-            fprintf(out, "    auto %s = ", name);
-            emit_expression(out, right);
-            fprintf(out, ";\n");
-        } else {
-            fprintf(out, "    auto %s = ", name);
-            emit_expression(out, right);
-            fprintf(out, ";\n");
-        }
+        fprintf(out, "    %s = ", name);
+        emit_expression(out, right);
+        fprintf(out, ";\n");
     }
 }
 
@@ -597,48 +585,11 @@ static void compile_for(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, 
     if (var_index >= 0 && var_index < MAX_VARS) {
         decl[var_index] = 1;
     }
-    /* foreach: if end == null iterate by index from 0..start.size()-1 */
     if (node->data.for_stmt.end == NULL) {
-        fprintf(out, "    {\n");
-        ASTNode* start = node->data.for_stmt.start;
-        if (start->type == AST_IDENTIFIER && ctx) {
-            const char* ident_name = start->data.identifier.name;
-            InferredType inferred_type = get_variable_type(ctx, ident_name);
-            
-            if (inferred_type == TYPE_STRING) {
-                fprintf(out, "        vtypes::VString __iter = %s;\n", ident_name);
-                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.size(); __idx++) {\n");
-                fprintf(out, "            auto %s = __iter[__idx];\n", loop_var_name);
-            } else if (inferred_type == TYPE_LIST) {
-                fprintf(out, "        vtypes::VList __iter = %s;\n", ident_name);
-                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.items.size(); __idx++) {\n");
-                fprintf(out, "            auto %s = __iter.items[__idx];\n", loop_var_name);
-            } else {
-                fprintf(out, "        auto __iter = %s;\n", ident_name);
-                fprintf(out, "        for(size_t __idx = 0; __idx < __iter; __idx++) {\n");
-                fprintf(out, "            auto %s = __idx;\n", loop_var_name);
-            }
-        } else {
-            InferredType expr_type = ctx ? infer_type(ctx, start) : TYPE_UNKNOWN;
-            
-            fprintf(out, "        auto __iter = ");
-            emit_expression(out, start);
-            fprintf(out, ";\n");
-            
-            if (expr_type == TYPE_LIST) {
-                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.items.size(); __idx++) {\n");
-                fprintf(out, "            auto %s = __iter.items[__idx];\n", loop_var_name);
-            } else if (expr_type == TYPE_STRING) {
-                fprintf(out, "        for(size_t __idx = 0; __idx < __iter.size(); __idx++) {\n");
-                fprintf(out, "            auto %s = __iter[__idx];\n", loop_var_name);
-            } else {
-                fprintf(out, "        for(size_t __idx = 0; __idx < __iter; __idx++) {\n");
-                fprintf(out, "            auto %s = __idx;\n", loop_var_name);
-            }
-        }
-        
+        fprintf(out, "    for (long long %s = 0; %s < (long long)(", loop_var_name, loop_var_name);
+        emit_expression(out, node->data.for_stmt.start);
+        fprintf(out, ").items.size(); %s++) {\n", loop_var_name);
         compile_node(gen, ctx, out, decl, node->data.for_stmt.body);
-        fprintf(out, "        }\n");
         fprintf(out, "    }\n");
         return;
     }
@@ -661,28 +612,58 @@ static void compile_for(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, 
     }
     fprintf(out, "    for (long long %s = ", loop_var_name);
     emit_expression(out, node->data.for_stmt.start);
-    fprintf(out, "; %s <= ", loop_var_name);
+    fprintf(out, "; %s < ", loop_var_name);
     emit_expression(out, node->data.for_stmt.end);
     fprintf(out, "; %s++) {\n", loop_var_name);
     compile_node(gen, ctx, out, decl, node->data.for_stmt.body);
     fprintf(out, "    }\n");
 }
 
-void compile_function(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node) {
+static const char* get_param_type_string(TypeInferenceContext* ctx, ASTNode* param) {
+    if (!param) return "auto";
+    if (param->type == AST_IDENTIFIER) {
+        InferredType t = ctx ? get_variable_type(ctx, param->data.identifier.name) : TYPE_UNKNOWN;
+        if (t != TYPE_UNKNOWN) {
+            return type_to_cpp_string(t);
+        }
+        return "auto";
+    }
+    else if (param->type == AST_ASSIGN && param->data.assign.left->type == AST_IDENTIFIER) {
+        ASTNode* right = param->data.assign.right;
+        if (right->type == AST_TYPE_LIST) {
+            return "VList&";
+        }
+        else if (right->type == AST_TYPE_INT32 || right->type == AST_TYPE_INT64) {
+            return "long long";
+        }
+        else if (right->type == AST_TYPE_FLOAT32 || right->type == AST_TYPE_FLOAT64) {
+            return "float";
+        }
+        else if (right->type == AST_TYPE_STRING) {
+            return "VString";
+        }
+        else if (right->type == AST_IDENTIFIER) {
+            return right->data.identifier.name;
+        }
+    }
+    return "auto";
+}
+
+static void compile_function(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out, int* decl, ASTNode* node) {
     if (node->type != AST_FUNCTION) return;
     fprintf(out, "auto %s(", node->data.function.name);
     if (node->data.function.params && node->data.function.params->type == AST_EXPRESSION_LIST) {
         for (int i = 0; i < node->data.function.params->data.expression_list.expression_count; i++) {
             if (i > 0) fprintf(out, ", ");
             ASTNode* param = node->data.function.params->data.expression_list.expressions[i];
+            const char* param_type = get_param_type_string(ctx, param);
+            
             if (param->type == AST_IDENTIFIER) {
-                fprintf(out, "auto %s", param->data.identifier.name);
+                fprintf(out, "%s %s", param_type, param->data.identifier.name);
             }
             else if (param->type == AST_ASSIGN && param->data.assign.left->type == AST_IDENTIFIER) {
                 const char* param_name = param->data.assign.left->data.identifier.name;
-                NodeType param_type = param->data.assign.right->type;
-                const char* cpp_type = node_type_to_cpp_string(param_type, NULL);
-                fprintf(out, "%s %s", cpp_type, param_name);
+                fprintf(out, "%s %s", param_type, param_name);
             }
             else {
                 fprintf(out, "auto %s", param->data.identifier.name);
@@ -755,7 +736,7 @@ static void compile_node(ByteCodeGen* gen, TypeInferenceContext* ctx, FILE* out,
             compile_print(out, node);
             break;
         case AST_ASSIGN:
-            compile_assign(gen, ctx, out, decl, node);
+            compile_assign(ctx, out, decl, node);
             break;
         case AST_CONST:
             compile_const(gen, ctx, out, decl, node);

@@ -523,6 +523,19 @@ ASTNode* create_type_node(NodeType type) {
     node->location = loc;
     return node;
 }
+ASTNode* create_list_type_node_with_location(ASTNode* element_type, Location location) {
+    ASTNode* node = malloc(sizeof(ASTNode));
+    if (!node) return NULL;
+    node->type = AST_TYPE_LIST;
+    node->location = location;
+    node->data.list_type.element_type = element_type;
+    return node;
+}
+
+ASTNode* create_list_type_node(ASTNode* element_type) {
+    Location loc = {0};
+    return create_list_type_node_with_location(element_type, loc);
+}
 
 ASTNode* create_if_node_with_location(ASTNode* condition, ASTNode* then_body, ASTNode* else_body, Location location) {
     ASTNode* node = malloc(sizeof(ASTNode));
@@ -1002,6 +1015,12 @@ void free_ast(ASTNode* node) {
         case AST_TYPE_POINTER:  // 添加对AST_TYPE_POINTER类型的处理
             break;
             
+        case AST_TYPE_LIST:
+            if (node->data.list_type.element_type) {
+                free_ast(node->data.list_type.element_type);
+            }
+            break;
+            
         case AST_IF:
             free_ast(node->data.if_stmt.condition);
             free_ast(node->data.if_stmt.then_body);
@@ -1231,6 +1250,22 @@ void print_ast(ASTNode* node, int indent) {
             break;
         case AST_TYPE_VOID:
             printf("Type: void\n");
+            break;
+        case AST_TYPE_LIST:
+            printf("Type: List of ");
+            if (node->data.list_type.element_type) {
+                switch(node->data.list_type.element_type->type) {
+                    case AST_TYPE_INT32: printf("i32"); break;
+                    case AST_TYPE_INT64: printf("i64"); break;
+                    case AST_TYPE_FLOAT32: printf("f32"); break;
+                    case AST_TYPE_FLOAT64: printf("f64"); break;
+                    case AST_TYPE_STRING: printf("string"); break;
+                    case AST_TYPE_VOID: printf("void"); break;
+                    case AST_IDENTIFIER: printf("%s", node->data.list_type.element_type->data.identifier.name); break;
+                    default: printf("unknown"); break;
+                }
+            }
+            printf("\n");
             break;
         case AST_FUNCTION:
             printf("Function: %s\n", node->data.function.name);

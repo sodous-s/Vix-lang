@@ -33,6 +33,37 @@ void free_bytecode_list(ByteCodeList* list) {
             if (list->codes[i].operand.print_args.arg_indices) {
                 free(list->codes[i].operand.print_args.arg_indices);
             }
+        } else if (list->codes[i].op == BC_FUNCTION_DEF) {
+            free(list->codes[i].operand.func_def_args.name);
+            if (list->codes[i].operand.func_def_args.param_indices) {
+                free(list->codes[i].operand.func_def_args.param_indices);
+            }
+        } else if (list->codes[i].op == BC_CALL) {
+            free(list->codes[i].operand.call_args.name);
+            if (list->codes[i].operand.call_args.arg_indices) {
+                free(list->codes[i].operand.call_args.arg_indices);
+            }
+        }
+        else if (list->codes[i].op == BC_STRUCT_DEF) {
+            free(list->codes[i].operand.struct_def_args.struct_name);
+            if (list->codes[i].operand.struct_def_args.field_names) {
+                for (int j = 0; j < list->codes[i].operand.struct_def_args.field_count; j++) {
+                    free(list->codes[i].operand.struct_def_args.field_names[j]);
+                }
+                free(list->codes[i].operand.struct_def_args.field_names);
+            }
+            if (list->codes[i].operand.struct_def_args.field_types) {
+                free(list->codes[i].operand.struct_def_args.field_types);
+            }
+        } else if (list->codes[i].op == BC_STRUCT_CREATE) {
+            free(list->codes[i].operand.struct_create_args.struct_name);
+            if (list->codes[i].operand.struct_create_args.field_values) {
+                free(list->codes[i].operand.struct_create_args.field_values);
+            }
+        } else if (list->codes[i].op == BC_STRUCT_GET_FIELD) {
+            free(list->codes[i].operand.struct_get_field_args.field_name);
+        } else if (list->codes[i].op == BC_STRUCT_SET_FIELD) {
+            free(list->codes[i].operand.struct_set_field_args.field_name);
         }
     }
     
@@ -469,7 +500,74 @@ void generate_bytecode_return(ByteCodeGen* gen, ASTNode* node) {
     }
     add_bytecode(gen, BC_RETURN);
 }
-
+void generate_bytecode_type_node(ByteCodeGen* gen, ASTNode* node) {
+    (void)gen;
+    (void)node;
+}
+void generate_bytecode_index(ByteCodeGen* gen, ASTNode* node) {
+    if (node->type != AST_INDEX) return;
+    generate_bytecode(gen, node->data.index.target);
+    int target_index = gen->bytecode->count - 1;
+    generate_bytecode(gen, node->data.index.index);
+    int index_index = gen->bytecode->count - 1;
+    ByteCode* bc = create_bytecode(BC_INDEX);
+    bc->operand.index_args.target_index = target_index;
+    bc->operand.index_args.index_index = index_index;
+    bc->operand.index_args.result_index = gen->tmp_counter++;
+    add_bytecode_full(gen, bc);
+}
+void generate_bytecode_struct_def(ByteCodeGen* gen, ASTNode* node) {
+    if (node->type != AST_STRUCT_DEF) return;
+    
+    ByteCode* bc = create_bytecode(BC_STRUCT_DEF);
+    bc->operand.struct_def_args.struct_name = malloc(strlen(node->data.struct_def.name) + 1);
+    strcpy(bc->operand.struct_def_args.struct_name, node->data.struct_def.name);
+    if (node->data.struct_def.fields && node->data.struct_def.fields->type == AST_EXPRESSION_LIST) {
+        bc->operand.struct_def_args.field_count = node->data.struct_def.fields->data.expression_list.expression_count;
+        bc->operand.struct_def_args.field_names = malloc(sizeof(char*) * bc->operand.struct_def_args.field_count);
+        bc->operand.struct_def_args.field_types = malloc(sizeof(int) * bc->operand.struct_def_args.field_count);
+        for (int i = 0; i < bc->operand.struct_def_args.field_count; i++) {
+            ASTNode* field = node->data.struct_def.fields->data.expression_list.expressions[i];
+            if (field->type == AST_ASSIGN) {
+                if (field->data.assign.left->type == AST_IDENTIFIER) {
+                    bc->operand.struct_def_args.field_names[i] = malloc(strlen(field->data.assign.left->data.identifier.name) + 1);
+                    strcpy(bc->operand.struct_def_args.field_names[i], field->data.assign.left->data.identifier.name);
+                }
+                bc->operand.struct_def_args.field_types[i] = 0;
+            }
+        }
+    } else {
+        bc->operand.struct_def_args.field_count = 0;
+        bc->operand.struct_def_args.field_names = NULL;
+        bc->operand.struct_def_args.field_types = NULL;
+    }
+    
+    add_bytecode_full(gen, bc);
+}
+void generate_bytecode_struct_literal(ByteCodeGen* gen, ASTNode* node) {
+    if (node->type != AST_STRUCT_LITERAL) return;
+    int* field_value_indices = NULL;
+    int field_count = 0;
+    if (node->data.struct_literal.fields && node->data.struct_literal.fields->type == AST_EXPRESSION_LIST) {
+        field_count = node->data.struct_literal.fields->data.expression_list.expression_count;
+        field_value_indices = malloc(sizeof(int) * field_count);
+        
+        for (int i = 0; i < field_count; i++) {
+            generate_bytecode(gen, node->data.struct_literal.fields->data.expression_list.expressions[i]);
+            field_value_indices[i] = gen->bytecode->count - 1;
+        }
+    }
+    ByteCode* bc = create_bytecode(BC_STRUCT_CREATE);
+    if (node->data.struct_literal.type_name->type == AST_IDENTIFIER) {
+        bc->operand.struct_create_args.struct_name = malloc(strlen(node->data.struct_literal.type_name->data.identifier.name) + 1);
+        strcpy(bc->operand.struct_create_args.struct_name, node->data.struct_literal.type_name->data.identifier.name);
+    }
+    bc->operand.struct_create_args.field_values = field_value_indices;
+    bc->operand.struct_create_args.field_count = field_count;
+    bc->operand.struct_create_args.result_index = gen->tmp_counter++;
+    
+    add_bytecode_full(gen, bc);
+}
 void generate_bytecode(ByteCodeGen* gen, ASTNode* node) {
     if (!node) return;
 
@@ -531,202 +629,271 @@ void generate_bytecode(ByteCodeGen* gen, ASTNode* node) {
         case AST_RETURN:
             generate_bytecode_return(gen, node);
             break;
+        case AST_INDEX:
+            generate_bytecode_index(gen, node);
+            break;
+        case AST_STRUCT_DEF:
+            generate_bytecode_struct_def(gen, node);
+            break;
+        case AST_STRUCT_LITERAL:
+            generate_bytecode_struct_literal(gen, node);
+            break;
+        case AST_TYPE_INT32:
+        case AST_TYPE_INT64:
+        case AST_TYPE_FLOAT32:
+        case AST_TYPE_FLOAT64:
+        case AST_TYPE_STRING:
+        case AST_TYPE_VOID:
+        case AST_TYPE_POINTER:
+        case AST_TYPE_LIST:
+            generate_bytecode_type_node(gen, node);
+            break;
         default:
             break;
     }
 }
 
 void print_bytecode(ByteCodeList* list) {
-    printf("Bytecode:\n");
+    print_bytecode_to_file(list, stdout);
+}
+
+void print_bytecode_to_file(ByteCodeList* list, FILE* output) {
     for (int i = 0; i < list->count; i++) {
-        printf("%4d: ", i);
         switch (list->codes[i].op) {
             case BC_LOAD_CONST_INT:
-                printf("LOAD_CONST_INT %lld\n", list->codes[i].operand.int_value);
+                fprintf(output, "LOAD_CONST_INT %lld\n", list->codes[i].operand.int_value);
                 break;
             case BC_LOAD_CONST_FLOAT:
-                printf("LOAD_CONST_FLOAT %f\n", list->codes[i].operand.float_value);
+                fprintf(output, "LOAD_CONST_FLOAT %f\n", list->codes[i].operand.float_value);
                 break;
             case BC_LOAD_CONST_STRING:
-                printf("LOAD_CONST_STRING \"%s\"\n", list->codes[i].operand.string_value);
+                fprintf(output, "LOAD_CONST_STRING \"%s\"\n", list->codes[i].operand.string_value);
                 break;
             case BC_LOAD_NAME:
-                printf("LOAD_NAME %d\n", list->codes[i].operand.var_index);
+                fprintf(output, "LOAD_NAME %d\n", list->codes[i].operand.var_index);
                 break;
             case BC_STORE_NAME:
-                printf("STORE_NAME %d\n", list->codes[i].operand.var_index);
+                fprintf(output, "STORE_NAME %d\n", list->codes[i].operand.var_index);
                 break;
             case BC_INPUT:
-                printf("INPUT\n");
+                fprintf(output, "INPUT\n");
                 break;
             case BC_TOINT:
-                printf("TOINT\n");
+                fprintf(output, "TOINT\n");
                 break;
             case BC_TOFLOAT:
-                printf("TOFLOAT\n");
+                fprintf(output, "TOFLOAT\n");
                 break;
             case BC_PRINT:
-                printf("PRINT");
+                fprintf(output, "PRINT");
                 if (list->codes[i].operand.print_args.arg_count > 0) {
                     for (int j = 0; j < list->codes[i].operand.print_args.arg_count; j++) {
-                        printf(" %d", list->codes[i].operand.print_args.arg_indices[j]);
+                        fprintf(output, " %d", list->codes[i].operand.print_args.arg_indices[j]);
                     }
                 }
-                printf("\n");
+                fprintf(output, "\n");
                 break;
             case BC_ADD:
-                printf("ADD %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "ADD %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_SUB:
-                printf("SUB %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "SUB %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_MUL:
-                printf("MUL %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "MUL %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_DIV:
-                printf("DIV %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "DIV %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_MOD:
-                printf("MOD %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "MOD %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_POW:
-                printf("POW %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "POW %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_CONCAT:
-                printf("CONCAT %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "CONCAT %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_REPEAT:
-                printf("REPEAT %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "REPEAT %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_NEG:
-                printf("NEG %%r%d, %%r%d\n", 
+                fprintf(output, "NEG %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1);
                 break;
             case BC_POS:
-                printf("POS %%r%d, %%r%d\n", 
+                fprintf(output, "POS %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1);
                 break;
             case BC_ADDRESS:
-                printf("ADDRESS %%r%d, %%r%d\n", 
+                fprintf(output, "ADDRESS %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1);
                 break;
             case BC_DEREF:
-                printf("DEREF %%r%d, %%r%d\n", 
+                fprintf(output, "DEREF %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1);
                 break;
             case BC_EQ:
-                printf("EQ %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "EQ %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_NE:
-                printf("NE %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "NE %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_LT:
-                printf("LT %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "LT %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_LE:
-                printf("LE %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "LE %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_GT:
-                printf("GT %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "GT %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_GE:
-                printf("GE %%r%d, %%r%d, %%r%d\n", 
+                fprintf(output, "GE %%r%d, %%r%d, %%r%d\n", 
                        list->codes[i].operand.triaddr.result,
                        list->codes[i].operand.triaddr.operand1,
                        list->codes[i].operand.triaddr.operand2);
                 break;
             case BC_JUMP:
-                printf("JUMP %d\n", list->codes[i].operand.jump_args.address);
+                fprintf(output, "JUMP %d\n", list->codes[i].operand.jump_args.address);
                 break;
             case BC_JUMP_IF_FALSE:
-                printf("JUMP_IF_FALSE %d (condition: %d)\n", 
+                fprintf(output, "JUMP_IF_FALSE %d (condition: %d)\n", 
                        list->codes[i].operand.jump_args.address, 
                        list->codes[i].operand.var_index);
                 break;
             case BC_BREAK:
-                printf("BREAK\n");
+                fprintf(output, "BREAK\n");
                 break;
             case BC_CONTINUE:
-                printf("CONTINUE\n");
+                fprintf(output, "CONTINUE\n");
                 break;
             case BC_FOR_PREPARE:
-                printf("FOR_PREPARE\n");
+                fprintf(output, "FOR_PREPARE\n");
                 break;
             case BC_FOR_LOOP:
-                printf("FOR_LOOP\n");
+                fprintf(output, "FOR_LOOP\n");
                 break;
             case BC_FUNCTION_DEF:
-                printf("FUNCTION_DEF %s (entry: %d)", 
+                fprintf(output, "FUNCTION_DEF %s (entry: %d)", 
                        list->codes[i].operand.func_def_args.name,
                        list->codes[i].operand.func_def_args.entry_point);
                 if (list->codes[i].operand.func_def_args.param_count > 0) {
-                    printf(" params:");
+                    fprintf(output, " params:");
                     for (int j = 0; j < list->codes[i].operand.func_def_args.param_count; j++) {
-                        printf(" %d", list->codes[i].operand.func_def_args.param_indices[j]);
+                        fprintf(output, " %d", list->codes[i].operand.func_def_args.param_indices[j]);
                     }
                 }
-                printf("\n");
+                fprintf(output, "\n");
                 break;
             case BC_CALL:
-                printf("CALL %s -> %d", 
+                fprintf(output, "CALL %s -> %d", 
                        list->codes[i].operand.call_args.name,
                        list->codes[i].operand.call_args.result_index);
                 if (list->codes[i].operand.call_args.arg_count > 0) {
-                    printf(" args:");
+                    fprintf(output, " args:");
                     for (int j = 0; j < list->codes[i].operand.call_args.arg_count; j++) {
-                        printf(" %d", list->codes[i].operand.call_args.arg_indices[j]);
+                        fprintf(output, " %d", list->codes[i].operand.call_args.arg_indices[j]);
                     }
                 }
-                printf("\n");
+                fprintf(output, "\n");
                 break;
             case BC_RETURN:
-                printf("RETURN\n");
+                fprintf(output, "RETURN\n");
+                break;
+            // 新增的字节码指令打印
+            case BC_INDEX:
+                fprintf(output, "INDEX %%r%d, %%r%d, %%r%d\n",
+                       list->codes[i].operand.index_args.result_index,
+                       list->codes[i].operand.index_args.target_index,
+                       list->codes[i].operand.index_args.index_index);
+                break;
+            case BC_STRUCT_DEF:
+                fprintf(output, "STRUCT_DEF %s", list->codes[i].operand.struct_def_args.struct_name);
+                if (list->codes[i].operand.struct_def_args.field_count > 0) {
+                    fprintf(output, " {");
+                    for (int j = 0; j < list->codes[i].operand.struct_def_args.field_count; j++) {
+                        fprintf(output, " %s", list->codes[i].operand.struct_def_args.field_names[j]);
+                        if (j < list->codes[i].operand.struct_def_args.field_count - 1) {
+                            fprintf(output, ",");
+                        }
+                    }
+                    fprintf(output, " }");
+                }
+                fprintf(output, "\n");
+                break;
+            case BC_STRUCT_CREATE:
+                fprintf(output, "STRUCT_CREATE %s -> %%r%d", 
+                       list->codes[i].operand.struct_create_args.struct_name,
+                       list->codes[i].operand.struct_create_args.result_index);
+                if (list->codes[i].operand.struct_create_args.field_count > 0) {
+                    fprintf(output, " fields:");
+                    for (int j = 0; j < list->codes[i].operand.struct_create_args.field_count; j++) {
+                        fprintf(output, " %%r%d", list->codes[i].operand.struct_create_args.field_values[j]);
+                        if (j < list->codes[i].operand.struct_create_args.field_count - 1) {
+                            fprintf(output, ",");
+                        }
+                    }
+                }
+                fprintf(output, "\n");
+                break;
+            case BC_STRUCT_GET_FIELD:
+                fprintf(output, "STRUCT_GET_FIELD %%r%d.%s -> %%r%d\n",
+                       list->codes[i].operand.struct_get_field_args.struct_index,
+                       list->codes[i].operand.struct_get_field_args.field_name,
+                       list->codes[i].operand.struct_get_field_args.result_index);
+                break;
+            case BC_STRUCT_SET_FIELD:
+                fprintf(output, "STRUCT_SET_FIELD %%r%d.%s = %%r%d\n",
+                       list->codes[i].operand.struct_set_field_args.struct_index,
+                       list->codes[i].operand.struct_set_field_args.field_name,
+                       list->codes[i].operand.struct_set_field_args.value_index);
                 break;
             default:
-                printf("UNKNOWN (%d)\n", list->codes[i].op);
+                fprintf(output, "UNKNOWN (%d)\n", list->codes[i].op);
                 break;
         }
     }

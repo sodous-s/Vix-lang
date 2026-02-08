@@ -35,6 +35,7 @@ typedef struct {
     InferredType element_type;
     InferredType pointer_target_type;  // 指针指向的类型
     StructTypeInfo* struct_type;       // 如果是结构体类型，指向结构体信息
+    int array_length;                 // 如果是数组，存储数组长度，-1表示未知
 } VariableInfo;
 
 typedef struct {

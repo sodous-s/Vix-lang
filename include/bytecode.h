@@ -38,7 +38,13 @@ typedef enum {
     BC_CALL,
     BC_RETURN,
     BC_ADDRESS,
-    BC_DEREF
+    BC_DEREF,
+    // 新增的字节码指令
+    BC_INDEX,           // 数组索引或结构体字段访问
+    BC_STRUCT_DEF,      // 结构体定义
+    BC_STRUCT_CREATE,   // 创建结构体实例
+    BC_STRUCT_GET_FIELD, // 获取结构体字段
+    BC_STRUCT_SET_FIELD  // 设置结构体字段
 } ByteCodeInstruction;
 
 typedef struct {
@@ -67,6 +73,39 @@ typedef struct {
     int result_index;
 } CallArgs;
 
+// 新增的结构体相关参数
+typedef struct {
+    int target_index;
+    int index_index;
+    int result_index;
+} IndexArgs;
+
+typedef struct {
+    char* struct_name;
+    int field_count;
+    char** field_names;
+    int* field_types;  // 类型编码
+} StructDefArgs;
+
+typedef struct {
+    char* struct_name;
+    int* field_values;
+    int field_count;
+    int result_index;
+} StructCreateArgs;
+
+typedef struct {
+    int struct_index;
+    char* field_name;
+    int result_index;
+} StructGetFieldArgs;
+
+typedef struct {
+    int struct_index;
+    char* field_name;
+    int value_index;
+} StructSetFieldArgs;
+
 typedef struct {
     ByteCodeInstruction op;
     union {
@@ -79,6 +118,12 @@ typedef struct {
         TriAddrOperands triaddr;
         FunctionDefArgs func_def_args;
         CallArgs call_args;
+        // 新增的参数类型
+        IndexArgs index_args;
+        StructDefArgs struct_def_args;
+        StructCreateArgs struct_create_args;
+        StructGetFieldArgs struct_get_field_args;
+        StructSetFieldArgs struct_set_field_args;
     } operand;
 } ByteCode;
 
@@ -105,5 +150,6 @@ void generate_bytecode_program(ByteCodeGen* gen, ASTNode* node);
 void generate_bytecode_print(ByteCodeGen* gen, ASTNode* node);   
 int get_variable_index(ByteCodeGen* gen, const char* name);
 void print_bytecode(ByteCodeList* list);
+void print_bytecode_to_file(ByteCodeList* list, FILE* output);
 
 #endif // BYTECODE_H

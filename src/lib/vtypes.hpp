@@ -96,6 +96,12 @@ public:
         _scalar_from_string = false;
     }
 
+    VString push(const VString& val) {
+        items.push_back(val);
+        _scalar_from_string = false;
+        return val;
+    }
+
     VString pop() {
         VString v = items.back();
         items.pop_back();

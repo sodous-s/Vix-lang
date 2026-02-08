@@ -17,7 +17,8 @@ typedef enum {
     ERROR_REDEFINITION,
     ERROR_SEMANTIC,
     ERROR_RUNTIME,
-    ERROR_WARNING
+    ERROR_WARNING,
+    ERROR_ARRAY_OUT_OF_BOUNDS
 } ErrorType;
 void set_location(const char* filename, int line);
 void set_location_with_column(const char* filename, int line, int column);
@@ -31,6 +32,7 @@ void report_redefinition_error_with_location(const char* identifier, const char*
 void report_runtime_error_with_location(const char* message, const char* filename, int line);
 void report_type_error_with_location(const char* expected, const char* actual, const char* filename, int line);
 void report_semantic_error_with_location(const char* message, const char* filename, int line);
+void report_array_out_of_bounds_error_with_location(const char* array_name, int index, int size, const char* filename, int line);
 void report_warning(const char* format, ...);
 void report_error(const char* format, ...);
 void report_fatal_error(const char* format, ...);

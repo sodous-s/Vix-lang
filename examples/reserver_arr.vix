@@ -1,0 +1,15 @@
+fn reserver_arr(arr:[i32]) -> [i32]
+{
+    res = [0, 0, 0, 0, 0, 0]
+    for(i in 0 .. arr.length)
+    {
+        res[arr.length - i - 1] = arr[i]
+    }
+    return res
+}
+fn main()
+{
+    arr = [1, 2, 3, 4, 5, 6]
+    res = reserver_arr(arr)
+    print(res)
+}

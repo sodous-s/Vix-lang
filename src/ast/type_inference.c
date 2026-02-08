@@ -150,10 +150,12 @@ InferredType infer_type(TypeInferenceContext* ctx, ASTNode* node) {
                 }
                 return infer_type(ctx, node->data.unaryop.expr);// 默认情况：返回内部表达式的类型
             } else if (node->data.unaryop.op == OP_ADDRESS) {
-                /*对于取地址操作，返回指针类型，指向被取地址的对象的类型
+                /*
+                对于取地址操作，返回指针类型，指向被取地址的对象的类型
                 inner_type = infer_type(ctx, node->data.unaryop.expr);
                 这里需要存储指针类型和它指向的类型
-                暂时返回内部表达式的类型，但实际实现需要更复杂的类型系统*/
+                暂时返回内部表达式的类型，但实际实现需要更复杂的类型系统
+                */
                 return TYPE_POINTER;
             } else {
                 return infer_type(ctx, node->data.unaryop.expr);
@@ -165,7 +167,6 @@ InferredType infer_type(TypeInferenceContext* ctx, ASTNode* node) {
         }
         case AST_EXPRESSION_LIST: {
             if (node->data.expression_list.expression_count == 0) return TYPE_LIST;
-            /* 从第一个元素推断元素类型(元素类型存储在其他地方*/
             return TYPE_LIST;
         }
         case AST_INDEX: {
@@ -241,6 +242,12 @@ InferredType infer_type(TypeInferenceContext* ctx, ASTNode* node) {
                         elem_type = infer_type(ctx, node->data.assign.right->data.expression_list.expressions[0]);
                     }
                     set_variable_list_type(ctx, node->data.assign.left->data.identifier.name, TYPE_LIST, elem_type);
+                    for (int i = 0; i < ctx->count; i++) {
+                        if (strcmp(ctx->variables[i].name, node->data.assign.left->data.identifier.name) == 0) {
+                            ctx->variables[i].array_length = node->data.assign.right->data.expression_list.expression_count;
+                            break;
+                        }
+                    }
                 } else if (right_type == TYPE_POINTER) {
                     if (node->data.assign.right && node->data.assign.right->type == AST_UNARYOP && node->data.assign.right->data.unaryop.op == OP_ADDRESS) {
                         ASTNode* inner = node->data.assign.right->data.unaryop.expr;
@@ -286,6 +293,7 @@ void set_variable_list_type(TypeInferenceContext* ctx, const char* var_name, Inf
         if (strcmp(ctx->variables[i].name, var_name) == 0) {
             ctx->variables[i].type = list_type;
             ctx->variables[i].element_type = element_type;
+            ctx->variables[i].array_length = -1;
             return;
         }
     }
@@ -297,8 +305,9 @@ void set_variable_list_type(TypeInferenceContext* ctx, const char* var_name, Inf
     strcpy(ctx->variables[ctx->count].name, var_name);
     ctx->variables[ctx->count].type = list_type;
     ctx->variables[ctx->count].element_type = element_type;
-    ctx->variables[ctx->count].pointer_target_type = TYPE_UNKNOWN; // 默认没有指针目标类型
-    ctx->variables[ctx->count].struct_type = NULL; // 默认没有结构体类型
+    ctx->variables[ctx->count].pointer_target_type = TYPE_UNKNOWN;
+    ctx->variables[ctx->count].struct_type = NULL;
+    ctx->variables[ctx->count].array_length = -1;
     ctx->count++;
 }
 
@@ -320,8 +329,9 @@ void set_variable_type(TypeInferenceContext* ctx, const char* var_name, Inferred
         if (strcmp(ctx->variables[i].name, var_name) == 0) {
             ctx->variables[i].type = type;
             ctx->variables[i].element_type = TYPE_UNKNOWN;
-            ctx->variables[i].pointer_target_type = TYPE_UNKNOWN; // 重置指针目标类型
-            ctx->variables[i].struct_type = NULL; // 重置结构体类型
+            ctx->variables[i].pointer_target_type = TYPE_UNKNOWN;//重置指针类型
+            ctx->variables[i].struct_type = NULL;
+            ctx->variables[i].array_length = -1;
             return;
         }
     }
@@ -334,8 +344,9 @@ void set_variable_type(TypeInferenceContext* ctx, const char* var_name, Inferred
     strcpy(ctx->variables[ctx->count].name, var_name);
     ctx->variables[ctx->count].type = type;
     ctx->variables[ctx->count].element_type = TYPE_UNKNOWN;
-    ctx->variables[ctx->count].pointer_target_type = TYPE_UNKNOWN; // 初始化指针目标类型
-    ctx->variables[ctx->count].struct_type = NULL; // 初始化结构体类型
+    ctx->variables[ctx->count].pointer_target_type = TYPE_UNKNOWN;
+    ctx->variables[ctx->count].struct_type = NULL;
+    ctx->variables[ctx->count].array_length = -1;
     ctx->count++;
 }
 
@@ -347,6 +358,7 @@ void set_variable_pointer_type(TypeInferenceContext* ctx, const char* var_name, 
             ctx->variables[i].pointer_target_type = target_type;
             ctx->variables[i].element_type = TYPE_UNKNOWN;
             ctx->variables[i].struct_type = NULL;
+            ctx->variables[i].array_length = -1;
             return;
         }
     }
@@ -361,6 +373,7 @@ void set_variable_pointer_type(TypeInferenceContext* ctx, const char* var_name, 
     ctx->variables[ctx->count].element_type = TYPE_UNKNOWN;
     ctx->variables[ctx->count].pointer_target_type = target_type;
     ctx->variables[ctx->count].struct_type = NULL;
+    ctx->variables[ctx->count].array_length = -1;
     ctx->count++;
 }
 
@@ -384,6 +397,7 @@ void set_variable_struct_type(TypeInferenceContext* ctx, const char* var_name, S
             ctx->variables[i].struct_type = struct_type;
             ctx->variables[i].element_type = TYPE_UNKNOWN;
             ctx->variables[i].pointer_target_type = TYPE_UNKNOWN;
+            ctx->variables[i].array_length = -1;
             return;
         }
     }
@@ -399,6 +413,7 @@ void set_variable_struct_type(TypeInferenceContext* ctx, const char* var_name, S
     ctx->variables[ctx->count].struct_type = struct_type;
     ctx->variables[ctx->count].element_type = TYPE_UNKNOWN;
     ctx->variables[ctx->count].pointer_target_type = TYPE_UNKNOWN;
+    ctx->variables[ctx->count].array_length = -1;
     ctx->count++;
 }
 StructTypeInfo* create_struct_type(const char* name) {

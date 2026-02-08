@@ -506,6 +506,30 @@ void report_semantic_error_with_location(const char* message, const char* filena
     current_filename = old_filename;
     current_line = old_line;
 }
+
+void report_array_out_of_bounds_error_with_location(const char* array_name, int index, int size, const char* filename, int line) {
+    const char* old_filename = current_filename;
+    int old_line = current_line;
+    
+    current_filename = filename ? filename : "unknown";
+    current_line = line;
+    char buffer[512];
+    if (array_name) {
+        snprintf(buffer, sizeof(buffer), 
+            "Array index out of bounds: accessing index %d in array '%s' of size %d.\n"
+            "Valid indices are from 0 to %d!", 
+            index, array_name, size, size - 1);
+    } else {
+        snprintf(buffer, sizeof(buffer), 
+            "Array index out of bounds: index %d.\n"
+            "Check that the index is within the valid range!", 
+            index);
+    }
+    report_simple_error(ERROR_LEVEL_ERROR, ERROR_ARRAY_OUT_OF_BOUNDS, buffer);
+    current_filename = old_filename;
+    current_line = old_line;
+}
+
 void report_runtime_error_with_location(const char* message, const char* filename, int line) {
     const char* old_filename = current_filename;
     int old_line = current_line;

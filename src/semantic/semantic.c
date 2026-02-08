@@ -8,6 +8,49 @@ typedef struct VisitedNode {
     ASTNode* node;
     struct VisitedNode* next;
 } VisitedNode;
+static void clear_var_init_map(void);
+static void add_var_init_mapping(const char* var_name, ASTNode* init_value);
+static ASTNode* find_var_init_mapping(const char* var_name);
+typedef struct VarInitMap {
+    char* var_name;
+    ASTNode* init_value;
+    struct VarInitMap* next;
+} VarInitMap;
+
+static VarInitMap* g_var_init_map = NULL;
+static void clear_var_init_map() {
+    VarInitMap* cur = g_var_init_map;
+    while (cur) {
+        VarInitMap* next = cur->next;
+        free(cur->var_name);
+        free(cur);
+        cur = next;
+    }
+    g_var_init_map = NULL;
+}
+static void add_var_init_mapping(const char* var_name, ASTNode* init_value) {
+    if (!var_name || !init_value) return;
+    VarInitMap* m = malloc(sizeof(VarInitMap));
+    if (!m) return;
+    m->var_name = malloc(strlen(var_name) + 1);
+    if (!m->var_name) {
+        free(m);
+        return;
+    }
+    strcpy(m->var_name, var_name);
+    m->init_value = init_value;
+    m->next = g_var_init_map;
+    g_var_init_map = m;
+}
+
+static ASTNode* find_var_init_mapping(const char* var_name) {
+    VarInitMap* cur = g_var_init_map;
+    while (cur) {
+        if (strcmp(cur->var_name, var_name) == 0) return cur->init_value;
+        cur = cur->next;
+    }
+    return NULL;
+}
 
 static int is_node_struct_field_assignment(ASTNode* node, VisitedNode* visited_list);
 static int is_node_struct_field_assignment(ASTNode* node, VisitedNode* visited_list) {
@@ -326,7 +369,7 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                     char buf[512];
                     snprintf(buf, sizeof(buf), 
                         "Cannot assign to dereference of an immutable pointer\n"
-                        "Fix: Declare the pointer as mutable using 'mut' (mut ptr = &var)");
+                        "Fix: Declare the pointer as mutable using 'mut ptr = &var')");
                     report_semantic_error_with_location(buf, filename, line);
                     errors_found++;
                 }
@@ -350,6 +393,9 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                         node->data.assign.right->data.struct_literal.type_name->type == AST_IDENTIFIER) {
                         const char* sname = node->data.assign.right->data.struct_literal.type_name->data.identifier.name;
                         add_var_struct_mapping(node->data.assign.left->data.identifier.name, sname);
+                    }
+                    if (node->data.assign.right) {
+                        add_var_init_mapping(node->data.assign.left->data.identifier.name, node->data.assign.right);
                     }
                 }
             }
@@ -525,6 +571,35 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                     }
                 }
             } else {
+                if (node->data.index.index && node->data.index.index->type == AST_NUM_INT) {
+                    long long index_value = node->data.index.index->data.num_int.value;
+                    if (node->data.index.target && node->data.index.target->type == AST_EXPRESSION_LIST) {
+                        int array_length = node->data.index.target->data.expression_list.expression_count;
+                        if (index_value >= array_length) {
+                            const char* filename = current_input_filename ? current_input_filename : "unknown";
+                            int line = (node->data.index.index->location.first_line > 0) ? node->data.index.index->location.first_line : 1;
+                            const char* array_name = NULL;
+                            if (node->data.index.target->location.first_line > 0) {
+                                array_name = "[...]";
+                            }
+                            report_array_out_of_bounds_error_with_location(array_name, (int)index_value, array_length, filename, line);
+                            errors_found++;
+                        }
+                    }
+                    else if (node->data.index.target && node->data.index.target->type == AST_IDENTIFIER) {
+                        const char* var_name = node->data.index.target->data.identifier.name;
+                        ASTNode* init_value = find_var_init_mapping(var_name);
+                        if (init_value && init_value->type == AST_EXPRESSION_LIST) {
+                            int array_length = init_value->data.expression_list.expression_count;
+                            if (index_value >= array_length) {
+                                const char* filename = current_input_filename ? current_input_filename : "unknown";
+                                int line = (node->data.index.index->location.first_line > 0) ? node->data.index.index->location.first_line : 1;
+                                report_array_out_of_bounds_error_with_location(var_name, (int)index_value, array_length, filename, line);
+                                errors_found++;
+                            }
+                        }
+                    }
+                }
                 errors_found += check_undefined_symbols_in_node_with_visited(node->data.index.index, table, new_visited_list);
             }
             break;
@@ -631,6 +706,7 @@ int check_undefined_symbols(ASTNode* node) {
     }
     g_struct_definitions = NULL;
     clear_var_struct_map();
+    clear_var_init_map(); // 清理初始化映射
     
     SymbolTable* global_table = create_symbol_table(NULL);
     if (!global_table) return 1;

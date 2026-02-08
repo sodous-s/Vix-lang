@@ -1,0 +1,13 @@
+fn arr_loop(arr:[i32])
+{
+    for(i in 0 .. arr.length)
+    {
+        print(arr[i])
+    }
+}
+fn main() ->i32
+{
+    arr = [5, 2, 8, 1, 9, 10]
+    arr_loop(arr)
+    return 0
+}

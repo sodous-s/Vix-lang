@@ -39,6 +39,7 @@ typedef enum {
     AST_TYPE_STRING,
     AST_TYPE_VOID,
     AST_TYPE_POINTER,  // 添加指针类型
+    AST_TYPE_LIST,
     AST_EXPRESSION_LIST,
     AST_INDEX,
     AST_INPUT,
@@ -57,20 +58,20 @@ typedef enum {
 } NodeType;
 
 typedef enum {
-    OP_ADD,      // +
-    OP_SUB,      // -
-    OP_MUL,      // *
-    OP_DIV,      // /
-    OP_MOD,      // %
-    OP_POW,      // **
+    OP_ADD,  // +
+    OP_SUB, // -
+    OP_MUL, // *
+    OP_DIV,     // /
+    OP_MOD, // %
+    OP_POW,     // **
     OP_CONCAT,   // +
     OP_REPEAT,   // *
-    OP_EQ,       // ==
-    OP_NE,       // !=
-    OP_LT,       // <
-    OP_LE,       // <=
-    OP_GT,       // >
-    OP_GE        // >=
+    OP_EQ,  // ==
+    OP_NE,  // !=
+    OP_LT,  // <
+    OP_LE,  // <=
+    OP_GT,  // >
+    OP_GE   // >=
 } BinOpType;
 
 typedef enum {
@@ -79,8 +80,6 @@ typedef enum {
     , OP_ADDRESS  // & 取地址
     , OP_DEREF    // @ 解引用
 } UnaryOpType;
-
-// 新增可变性标记枚举
 typedef enum {
     MUTABILITY_IMMUTABLE = 0,  // 不可变
     MUTABILITY_MUTABLE         // 可变
@@ -132,6 +131,9 @@ typedef struct ASTNode {
         struct {
             char* name;
         } identifier;
+        struct {
+            struct ASTNode* element_type;
+        } list_type;
         struct {
             struct ASTNode* prompt;
         } input;
@@ -226,6 +228,8 @@ ASTNode* create_identifier_node_with_location(const char* name, Location locatio
 ASTNode* create_identifier_node_with_yyltype(const char* name, void* yylloc);
 ASTNode* create_type_node(NodeType type);
 ASTNode* create_type_node_with_location(NodeType type, Location location);
+ASTNode* create_list_type_node(ASTNode* element_type);
+ASTNode* create_list_type_node_with_location(ASTNode* element_type, Location location);
 ASTNode* create_if_node(ASTNode* condition, ASTNode* then_body, ASTNode* else_body);
 ASTNode* create_if_node_with_location(ASTNode* condition, ASTNode* then_body, ASTNode* else_body, Location location);
 ASTNode* create_if_node_with_yyltype(ASTNode* condition, ASTNode* then_body, ASTNode* else_body, void* yylloc);
