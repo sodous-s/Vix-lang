@@ -27,6 +27,7 @@ typedef enum {
     AST_ASSIGN,
     AST_CONST,
     AST_GLOBAL,  // 全局变量声明节点
+    AST_IMPORT,  // 添加模块导入节点
     AST_BINOP,
     AST_UNARYOP,
     AST_NUM_INT,
@@ -186,6 +187,7 @@ typedef struct ASTNode {
             int is_extern;
             char* linkage;
             int vararg;
+            int is_public;  // 添加公共函数标记
         } function;
         struct {
             struct ASTNode* func;
@@ -207,6 +209,9 @@ typedef struct ASTNode {
             struct ASTNode* type;//可能为NULL
             struct ASTNode* initializer;
         } global_decl;
+        struct {  // 添加import节点的数据结构
+            char* module_path;
+        } import;
     } data;
 } ASTNode;
 
@@ -242,6 +247,7 @@ ASTNode* create_binop_node_with_location(BinOpType op, ASTNode* left, ASTNode* r
 ASTNode* create_binop_node_with_yyltype(BinOpType op, ASTNode* left, ASTNode* right, void* yylloc);
 ASTNode* create_unaryop_node(UnaryOpType op, ASTNode* expr);
 ASTNode* create_unaryop_node_with_location(UnaryOpType op, ASTNode* expr, Location location);
+ASTNode* create_unaryop_node_with_yyltype(UnaryOpType op, ASTNode* expr, void* yylloc);
 ASTNode* create_num_int_node(long long value);
 ASTNode* create_num_int_node_with_location(long long value, Location location);
 ASTNode* create_num_int_node_with_yyltype(long long value, void* yylloc);
@@ -283,6 +289,8 @@ ASTNode* create_continue_node_with_location(Location location);
 ASTNode* create_continue_node_with_yyltype(void* yylloc);
 ASTNode* create_function_node(const char* name, ASTNode* params, ASTNode* return_type, ASTNode* body);
 ASTNode* create_function_node_with_location(const char* name, ASTNode* params, ASTNode* return_type, ASTNode* body, Location location);
+ASTNode* create_public_function_node(const char* name, ASTNode* params, ASTNode* return_type, ASTNode* body);  // 添加创建公共函数的函数
+ASTNode* create_public_function_node_with_location(const char* name, ASTNode* params, ASTNode* return_type, ASTNode* body, Location location);  // 添加创建公共函数的函数
 ASTNode* create_extern_function_node(const char* name, ASTNode* params, ASTNode* return_type, const char* linkage);
 ASTNode* create_extern_function_node_with_location(const char* name, ASTNode* params, ASTNode* return_type, const char* linkage, Location location);
 ASTNode* create_return_node(ASTNode* expr);
@@ -306,8 +314,13 @@ ASTNode* create_struct_literal_node_with_yyltype(ASTNode* type_name, ASTNode* fi
 ASTNode* create_global_node_with_location(ASTNode* identifier, ASTNode* type, ASTNode* initializer, Location location);
 ASTNode* create_global_node(ASTNode* identifier, ASTNode* type, ASTNode* initializer);
 ASTNode* create_global_node_with_yyltype(ASTNode* identifier, ASTNode* type, ASTNode* initializer, void* yylloc);
+ASTNode* create_import_node(const char* module_path);  // 添加import节点创建函数
+ASTNode* create_import_node_with_location(const char* module_path, Location location);
+ASTNode* create_import_node_with_yyltype(const char* module_path, void* yylloc);
 void free_ast(ASTNode* node);
 void print_ast(ASTNode* node, int indent);
 int get_array_length(ASTNode* node);
+// Inline imports: parse modules and inline their `pub` functions into the AST
+void inline_imports(ASTNode* node);
 
 #endif/*AST_H*/

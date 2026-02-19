@@ -51,7 +51,7 @@ pacman -S flex bison g++ gcc make
 
 ```bash
 # 克隆仓库
-git clone https://github.com/Daweidie/vix-lang.git ##或 git clone -b windows https://gitee.com/Mulang_zty/Vix-lang.git
+git clone https://github.com/Daweidie/vix-lang.git ## 或 git clone -b windows https://gitee.com/Mulang_zty/Vix-lang.git
 cd vix-lang
 
 # 构建项目

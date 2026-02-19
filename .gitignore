@@ -11,4 +11,5 @@ a.out
 *.spec
 build
 dist
+!lib
 .VSCodeCounter

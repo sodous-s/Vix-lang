@@ -22,10 +22,10 @@
 1. 安装依赖
 
 ```shell
-apt install gcc g++ flex bison ## ubuntu
-yum install gcc gcc-c++ flex bison ## centos
-brew install flex bison ## macos
-pacman -S flex bison g++ gcc ## archlinux
+apt install gcc g++ flex bison llvm clang-18## ubuntu
+yum install gcc gcc-c++ flex bison llvm clang-18 ## centos
+brew install flex bison llvm clang-18 ## macos
+pacman -S flex bison g++ gcc llvm clang-18 ## archlinux
 ```
 
 ### 编译
