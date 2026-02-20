@@ -5,7 +5,7 @@
 [![自举进度](https://img.shields.io/badge/自举-90%25-orange)]()
 [![后端](https://img.shields.io/badge/后端-LLVM%20%7C%20QBE%20%7C%20C++-brightgreen)]()
 [![VS Code扩展](https://img.shields.io/badge/VS%20Code-扩展-purple)]()
-[![许可证](https://img.shields.io/badge/许可证-MIT-green)]()
+[![许可证](https://img.shields.io/badge/许可证-MIT-green)](LICENSE)
 
 Vix 是一种轻量级编译型语言，旨在提供**接近原生 C++ 的执行速度**，同时保持脚本语言的简洁性和易用性。
 
