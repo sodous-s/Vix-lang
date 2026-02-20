@@ -1,5 +1,2 @@
-fn main() ->i32
-{
-    print("Vix 0.0.1 version!")
-    return 0
-}
+import "std/io.vix"
+puts("Hello world!")

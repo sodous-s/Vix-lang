@@ -3,6 +3,7 @@
 包含创建字节码，
 管理字节码列表，
 将AST转换为字节码以及打印字节码等功能
+vix 0.0.1 released!
 */
 #include "../include/bytecode.h"
 #include <stdio.h>

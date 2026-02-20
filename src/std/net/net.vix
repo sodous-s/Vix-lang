@@ -1,0 +1,43 @@
+extern "C"
+{
+    fn socket(domain: i32, type: i32, protocol: i32) -> i32
+    fn listen(sockfd: i32, backlog: i32) -> i32
+    fn accept(sockfd: i32, addr: i32, addrlen: i32) -> i32
+    fn send(sockfd: i32, buf: ptr, len: i32, flags: i32) -> i32
+    fn close(fd: i32) -> i32
+    fn printf(format: ptr, ...) -> i32
+}
+
+pub fn socket(domain: i32, type: i32, protocol: i32) -> i32
+{
+    return socket(domain, type, protocol);
+}
+pub fn listen(sockfd: i32, backlog: i32) -> i32
+{
+    return listen(sockfd, backlog);
+}
+pub fn bind(sockfd: i32, addr: ptr, addrlen: i32) -> i32
+{
+    return bind(sockfd, addr, addrlen);
+}
+pub fn connect(sockfd: i32, addr: ptr, addrlen: i32) -> i32
+{
+    return connect(sockfd, addr, addrlen);
+}
+pub fn accept(sockfd: i32, addr: ptr, addrlen: ptr) -> i32
+{
+    return accept(sockfd, addr, addrlen);
+}
+pub fn send(sockfd: i32, buf: ptr, len: i32, flags: i32) -> i32
+{
+    return send(sockfd, buf, len, flags);
+}
+pub fn recv(sockfd: i32, buf: ptr, len: i32, flags: i32) -> i32
+{
+    return recv(sockfd, buf, len, flags);
+}
+pub fn close(fd: i32) -> i32
+{
+    return close(fd);
+}
+

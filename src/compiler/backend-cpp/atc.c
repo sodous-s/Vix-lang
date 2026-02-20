@@ -1,3 +1,6 @@
+/*
+vix 0.0.1 released!
+*/
 #include "../include/compiler.h"
 #include "../include/ast.h"
 #include <stdio.h>
@@ -380,7 +383,6 @@ static void emit_expression_with_context(FILE* out, ASTNode* node, int in_struct
                     if (array_length >= 0) {
                         fprintf(out, "%d", array_length);
                     } else {
-                        // fallback到原来的实现
                         fprintf(out, "(");
                         emit_expression_with_context(out, node->data.member_access.object, in_struct_literal, ctx);
                         fprintf(out, ").items.size()");

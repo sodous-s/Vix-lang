@@ -54,7 +54,7 @@ vixc hello.vix -o hello
 ```
 
 ### 📖 更多示例
-（展示更丰富的语法特性：函数、控制流、类型系统等）
+[示例](examples)
 
 ### 📚 文档目录
 [目录](Docs/README.md)

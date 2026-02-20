@@ -1,0 +1,8 @@
+extern "C"
+{
+    fn printf(format: ptr, ...) -> i32
+}
+pub fn puts(s: ptr) -> i32
+{
+    return printf("%s\n", s)
+}

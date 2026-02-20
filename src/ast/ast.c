@@ -1618,6 +1618,16 @@ static void inline_imports_in_node(ASTNode* node) {
 
     if (node->type == AST_PROGRAM) {
         int i = 0;
+        int inserted_extern_count = 0;
+        char** inserted_externs = NULL;
+        for (int z = 0; z < node->data.program.statement_count; z++) {
+            ASTNode* s = node->data.program.statements[z];
+            if (s && s->type == AST_FUNCTION && s->data.function.is_extern && s->data.function.name) {
+                inserted_externs = realloc(inserted_externs, sizeof(char*) * (inserted_extern_count + 1));
+                inserted_externs[inserted_extern_count++] = strdup(s->data.function.name);
+            }
+        }
+
         while (i < node->data.program.statement_count) {
             ASTNode* stmt = node->data.program.statements[i];
             if (!stmt) { i++; continue; }
@@ -1664,28 +1674,97 @@ static void inline_imports_in_node(ASTNode* node) {
                     i++;
                     continue;
                 }
-                int pub_count = 0;//计数
+                int add_count = 0;
                 for (int j = 0; j < module_root->data.program.statement_count; j++) {
                     ASTNode* s = module_root->data.program.statements[j];
-                    if (s && s->type == AST_FUNCTION && s->data.function.is_public) pub_count++;
+                    if (!s) continue;
+                    if (s->type == AST_FUNCTION) {
+                        if (s->data.function.is_public) {
+                            add_count++;
+                        } else if (s->data.function.is_extern && s->data.function.name) {
+                            int found = 0;
+                            for (int e = 0; e < inserted_extern_count; e++) {
+                                if (strcmp(inserted_externs[e], s->data.function.name) == 0) { found = 1; break; }
+                            }
+                            if (!found) {
+                                add_count++;
+                                inserted_externs = realloc(inserted_externs, sizeof(char*) * (inserted_extern_count + 1));
+                                inserted_externs[inserted_extern_count++] = strdup(s->data.function.name);
+                            }
+                        }
+                    } else if (s->type == AST_PROGRAM) {
+                        for (int jj = 0; jj < s->data.program.statement_count; jj++) {
+                            ASTNode* t = s->data.program.statements[jj];
+                            if (!t || t->type != AST_FUNCTION) continue;
+                            if (t->data.function.is_public) {
+                                add_count++;
+                            } else if (t->data.function.is_extern && t->data.function.name) {
+                                int found = 0;
+                                for (int e = 0; e < inserted_extern_count; e++) {
+                                    if (strcmp(inserted_externs[e], t->data.function.name) == 0) { found = 1; break; }
+                                }
+                                if (!found) {
+                                    add_count++;
+                                    inserted_externs = realloc(inserted_externs, sizeof(char*) * (inserted_extern_count + 1));
+                                    inserted_externs[inserted_extern_count++] = strdup(t->data.function.name);
+                                }
+                            }
+                        }
+                    }
                 }
 
-                if (pub_count == 0) {
+                if (add_count == 0) {
                     free_ast(module_root);
                     i++;
                     continue;
                 }
 
                 int old_count = node->data.program.statement_count;
-                int new_count = old_count - 1 + pub_count; //rm import add pub_count
+                int new_count = old_count - 1 + add_count;
                 ASTNode** new_statements = malloc(sizeof(ASTNode*) * new_count);
                 int idx = 0;
                 for (int k = 0; k < i; k++) new_statements[idx++] = node->data.program.statements[k];//复制
                 for (int j = 0; j < module_root->data.program.statement_count; j++) {
                     ASTNode* s = module_root->data.program.statements[j];
-                    if (s && s->type == AST_FUNCTION && s->data.function.is_public) {
-                        new_statements[idx++] = s;
-                        module_root->data.program.statements[j] = NULL;//no double free
+                    if (!s) continue;
+                    if (s->type == AST_FUNCTION) {
+                        if (s->data.function.is_public) {
+                            new_statements[idx++] = s;
+                            module_root->data.program.statements[j] = NULL;//no double free
+                        } else if (s->data.function.is_extern && s->data.function.name) {
+                            int already_moved = 0;
+                            for (int p = 0; p < idx; p++) {
+                                ASTNode* moved = new_statements[p];
+                                if (moved && moved->type == AST_FUNCTION && moved->data.function.is_extern && moved->data.function.name && strcmp(moved->data.function.name, s->data.function.name) == 0) {
+                                    already_moved = 1; break;
+                                }
+                            }
+                        if (!already_moved) {
+                            new_statements[idx++] = s;
+                            module_root->data.program.statements[j] = NULL;
+                        }
+                        }
+                    } else if (s->type == AST_PROGRAM) {
+                        for (int jj = 0; jj < s->data.program.statement_count; jj++) {
+                            ASTNode* t = s->data.program.statements[jj];
+                            if (!t || t->type != AST_FUNCTION) continue;
+                            if (t->data.function.is_public) {
+                                new_statements[idx++] = t;
+                                s->data.program.statements[jj] = NULL;
+                            } else if (t->data.function.is_extern && t->data.function.name) {
+                                int already_moved = 0;
+                                for (int p = 0; p < idx; p++) {
+                                    ASTNode* moved = new_statements[p];
+                                    if (moved && moved->type == AST_FUNCTION && moved->data.function.is_extern && moved->data.function.name && strcmp(moved->data.function.name, t->data.function.name) == 0) {
+                                        already_moved = 1; break;
+                                    }
+                                }
+                                if (!already_moved) {
+                                    new_statements[idx++] = t;
+                                    s->data.program.statements[jj] = NULL;
+                                }
+                            }
+                        }
                     }
                 }
                 for (int k = i + 1; k < old_count; k++) new_statements[idx++] = node->data.program.statements[k];//复制语句
@@ -1707,12 +1786,15 @@ static void inline_imports_in_node(ASTNode* node) {
                 module_root->data.program.statements = rem;
                 module_root->data.program.statement_count = remaining;
                 free_ast(module_root);
-                i += pub_count; //next
+                i += add_count; //next
             } else {
                 inline_imports_in_node(stmt);
                 i++;
             }
         }
+        /* cleanup inserted_externs */
+        for (int z = 0; z < inserted_extern_count; z++) free(inserted_externs[z]);
+        free(inserted_externs);
         return;
     }
 

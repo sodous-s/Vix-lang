@@ -1,5 +1,6 @@
-// llvm_emit.cpp - 修复版本（解决ICmp类型不匹配问题）
-
+/*
+vix0.0.1 released!
+*/
 #include "../include/llvm_emit.h"
 #include "../include/ast.h"
 #include <llvm/IR/IRBuilder.h>

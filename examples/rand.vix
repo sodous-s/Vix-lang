@@ -3,16 +3,14 @@ fn rand(mini:i32,max:i32) ->i32 //tips:由左值决定返回值大小，如下�
 {
     seed = (seed * 9301 + 49297) % 233280
     if (seed < 0) {
-        seed = -seed
+        seed =  -  seed
     }
-    return mini + (seed % (max - mini + 1))
+    return  mini + (seed % (max -  mini + 1))
 }
-fn main() ->i32
-{
+fn main() ->  i32 {
     n = 0
-    for(i in 0 .. 10)
-    {
-        n = rand(1, 100)
+    for (i in  0 .. 10) {
+        n =  rand(1, 100)
         print(n)
     }
 }
