@@ -244,6 +244,14 @@ public:
         
         if (node->type == AST_IDENTIFIER) {
             std::string typeName(node->data.identifier.name);
+            if (typeName == "ptr") return PointerType::getUnqual(Type::getInt8Ty(context));
+            if (typeName == "str") return PointerType::getUnqual(Type::getInt8Ty(context));
+            if (typeName == "i8") return Type::getInt8Ty(context);
+            if (typeName == "i32") return Type::getInt32Ty(context);
+            if (typeName == "i64") return Type::getInt64Ty(context);
+            if (typeName == "f32") return Type::getFloatTy(context);
+            if (typeName == "f64") return Type::getDoubleTy(context);
+            if (typeName == "void") return Type::getVoidTy(context);
             StructType* st = getStructType(typeName);
             if (st) return st;
             
@@ -269,6 +277,19 @@ public:
             case AST_TYPE_POINTER: return ValueType::POINTER;
             case AST_TYPE_LIST:    return ValueType::ARRAY;
             case AST_TYPE_FIXED_SIZE_LIST: return ValueType::ARRAY;
+            case AST_IDENTIFIER: {
+                if (!node->data.identifier.name) return ValueType::INT32;
+                std::string typeName(node->data.identifier.name);
+                if (typeName == "ptr") return ValueType::POINTER;
+                if (typeName == "str") return ValueType::STRING;
+                if (typeName == "i8") return ValueType::INT8;
+                if (typeName == "i32") return ValueType::INT32;
+                if (typeName == "i64") return ValueType::INT64;
+                if (typeName == "f32") return ValueType::FLOAT32;
+                if (typeName == "f64") return ValueType::FLOAT64;
+                if (typeName == "void") return ValueType::VOID;
+                return ValueType::INT32;
+            }
             default:               return ValueType::INT32;
         }
     }
@@ -628,6 +649,7 @@ public:
             case AST_NUM_FLOAT:    return visitNumFloat(node);
             case AST_STRING:       return visitString(node);
             case AST_CHAR:         return visitChar(node);
+            case AST_NIL:          return visitNil(node);
             case AST_IDENTIFIER:   return visitIdentifier(node);
             case AST_BINOP:        return visitBinOp(node);
             case AST_UNARYOP:      return visitUnaryOp(node);
@@ -698,6 +720,13 @@ public:
         char ch = node->data.character.value;
         Value* value = ConstantInt::get(Type::getInt8Ty(context), static_cast<int8_t>(ch));
         return VisitResult(value, ValueType::INT8);
+    }
+
+    VisitResult visitNil(ASTNode* node) {
+        (void)node;
+        Type* nilPtrType = PointerType::getUnqual(Type::getInt8Ty(context));
+        Value* nilValue = ConstantPointerNull::get(cast<PointerType>(nilPtrType));
+        return VisitResult(nilValue, ValueType::POINTER);
     }
 
     VisitResult visitIdentifier(ASTNode* node) {
@@ -993,6 +1022,23 @@ public:
                 
                 if (rightVal.value && rightVal.value->getType()->isPointerTy()) {
                     Type* elemType = Type::getInt32Ty(context);
+                    if (arraySize > 0) {
+                        ASTNode* firstElem = node->data.assign.right->data.expression_list.expressions[0];
+                        if (firstElem) {
+                            if (firstElem->type == AST_STRING) {
+                                elemType = PointerType::getUnqual(Type::getInt8Ty(context));
+                            } else if (firstElem->type == AST_CHAR) {
+                                elemType = Type::getInt8Ty(context);
+                            } else if (firstElem->type == AST_NUM_FLOAT) {
+                                elemType = Type::getDoubleTy(context);
+                            } else if (firstElem->type == AST_NUM_INT) {
+                                int64_t v = firstElem->data.num_int.value;
+                                elemType = (v >= -2147483648LL && v <= 2147483647LL)
+                                           ? Type::getInt32Ty(context)
+                                           : Type::getInt64Ty(context);
+                            }
+                        }
+                    }
                     typeHelper.registerArrayType(name, elemType, arraySize);
                 }
             }
@@ -1051,6 +1097,11 @@ public:
                 Value* gep = builder.CreateInBoundsGEP(elemType, arrayPtr, idxVal, "ptr_index_ptr");
                 VisitResult rightVal = visit(node->data.assign.right);
                 if (!rightVal.value) return VisitResult();
+                if (!varName.empty() && varName != "argv" && !typeHelper.getArrayTypeInfo(varName)) {
+                    typeHelper.registerArrayType(varName, rightVal.value->getType(), -1);
+                    elemType = rightVal.value->getType();
+                    gep = builder.CreateInBoundsGEP(elemType, arrayPtr, idxVal, "ptr_index_ptr");
+                }
                 ValueType vt = typeHelper.getValueTypeFromType(elemType);
                 Value* casted = typeHelper.castValue(builder, rightVal.value, rightVal.type, vt);
                 builder.CreateStore(casted, gep);
@@ -1072,6 +1123,11 @@ public:
             if (gep) {
                 VisitResult rightVal = visit(node->data.assign.right);
                 if (!rightVal.value) return VisitResult();
+                if (!varName.empty() && varName != "argv" && !typeHelper.getArrayTypeInfo(varName)) {
+                    typeHelper.registerArrayType(varName, rightVal.value->getType(), -1);
+                    elemType = rightVal.value->getType();
+                    gep = builder.CreateInBoundsGEP(elemType, targRes.value, idxVal, "arr_index_ptr");
+                }
                 ValueType vt = typeHelper.getValueTypeFromType(elemType);
                 Value* casted = typeHelper.castValue(builder, rightVal.value, rightVal.type, vt);
                 builder.CreateStore(casted, gep);
@@ -1528,11 +1584,12 @@ public:
                 }
             }
         }
+        Type* returnType = Type::getVoidTy(context);
         ValueType returnValueType = ValueType::VOID;
         if (node->data.function.return_type) {
-            returnValueType = typeHelper.fromTypeNode(node->data.function.return_type);
+            returnType = typeHelper.getTypeFromTypeNode(node->data.function.return_type);
+            returnValueType = typeHelper.getValueTypeFromType(returnType);
         }
-        Type* returnType = typeHelper.getLLVMType(returnValueType);
         bool isVarArg = node->data.function.vararg == 1;
         FunctionType* funcType = FunctionType::get(returnType, paramTypes, isVarArg);
         Function* func = Function::Create(funcType, Function::ExternalLinkage, funcName, module.get());
@@ -1678,6 +1735,18 @@ public:
                         } else {
                             expectedType = argRes.value->getType();
                         }
+                    }
+
+                    if (calleeName == "malloc" && i == 0) {
+                        Value* mallocSize = argRes.value;
+                        if (!mallocSize->getType()->isIntegerTy()) {
+                            mallocSize = typeHelper.castValue(builder, mallocSize, argRes.type, ValueType::INT32);
+                        }
+                        uint64_t elemBytes = 4;
+                        Value* scale = ConstantInt::get(mallocSize->getType(), elemBytes);
+                        mallocSize = builder.CreateMul(mallocSize, scale, "malloc_bytes");
+                        argRes.value = mallocSize;
+                        argRes.type = typeHelper.getValueTypeFromType(mallocSize->getType());
                     }
                     
                     ValueType expectedValueType = typeHelper.getValueTypeFromType(expectedType);

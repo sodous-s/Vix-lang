@@ -1,12 +1,4 @@
-extern "C"
-{
-    fn socket(domain: i32, type: i32, protocol: i32) -> i32
-    fn listen(sockfd: i32, backlog: i32) -> i32
-    fn accept(sockfd: i32, addr: i32, addrlen: i32) -> i32
-    fn send(sockfd: i32, buf: ptr, len: i32, flags: i32) -> i32
-    fn close(fd: i32) -> i32
-    fn printf(format: ptr, ...) -> i32
-}
+import "std/net/net.vix"
 
 fn main() -> i32
 {

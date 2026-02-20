@@ -1,5 +1,9 @@
-import "std/io.vix"
-import "std/mem.vix"
+extern "C"
+{
+    fn printf(format: ptr, ...) -> i32
+    fn malloc(size: i32) -> ptr
+    fn free(ptr: ptr) -> i32
+}
 fn main() ->i32
 {
     a = malloc(10)
