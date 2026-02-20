@@ -1,0 +1,153 @@
+extern "C"
+{
+    // Windows API functions for GUI operations
+    fn CreateWindowExA(dwExStyle: u32, lpClassName: ptr, lpWindowName: ptr, dwStyle: u32, 
+               x: i32, y: i32, nWidth: i32, nHeight: i32, hWndParent: i32, hMenu: i32, hInstance: i32, lpParam: ptr) -> i32
+    fn RegisterClassExA(lpwcx: ptr) -> u16
+    fn ShowWindow(hWnd: i32, nCmdShow: i32) -> i32
+    fn UpdateWindow(hWnd: i32) -> i32
+    fn GetMessageA(lpMsg: ptr, hWnd: i32, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32
+    fn TranslateMessage(lpMsg: ptr) -> i32
+    fn DispatchMessageA(lpMsg: ptr) -> i32
+    fn DefWindowProcA(hWnd: i32, Msg: u32, wParam: i32, lParam: i32) -> i32
+    fn PostQuitMessage(nExitCode: i32) -> ()
+    fn BeginPaint(hWnd: i32, lpPaint: ptr) -> i32
+    fn EndPaint(hWnd: i32, lpPaint: ptr) -> ()
+    fn GetStockObject(i: i32) -> i32
+    fn SetTextColor(hdc: i32, color: u32) -> u32
+    fn SetBkColor(hdc: i32, color: u32) -> u32
+    fn TextOutA(hdc: i32, x: i32, y: i32, lpString: ptr, c: i32) -> i32
+    fn FillRect(hDC: i32, lprc: ptr, hbr: i32) -> i32
+    fn MessageBoxA(hWnd: i32, lpText: ptr, lpCaption: ptr, uType: u32) -> i32
+    fn LoadIconA(hInstance: i32, lpIconName: ptr) -> i32
+    fn LoadCursorA(hInstance: i32, lpCursorName: ptr) -> i32
+    fn GetClientRect(hWnd: i32, lpRect: ptr) -> i32
+    fn MoveWindow(hWnd: i32, X: i32, Y: i32, nWidth: i32, nHeight: i32, bRepaint: i32) -> i32
+    fn DestroyWindow(hWnd: i32) -> i32
+    fn CreateButton(dwExStyle: u32, lpClassName: ptr, lpWindowName: ptr, dwStyle: u32, 
+                    x: i32, y: i32, nWidth: i32, nHeight: i32, hWndParent: i32, hMenu: i32, hInstance: i32, lpParam: ptr) -> i32
+    fn SendMessageA(hWnd: i32, Msg: u32, wParam: i32, lParam: i32) -> i32
+    fn GetDlgItem(hDlg: i32, nIDDlgItem: i32) -> i32
+}
+
+pub const WS_OVERLAPPEDWINDOW = 0xCF0000;
+pub const WM_DESTROY = 0x0010;
+pub const WM_PAINT = 0x000F;
+pub const WM_COMMAND = 0x0111;
+pub const IDC_STATIC = -1;
+pub const IDC_BUTTON = 1001;
+
+pub struct Rect
+{
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32
+}
+
+pub struct Window
+{
+    handle: i32,
+    title: ptr,
+    width: i32,
+    height: i32
+}
+
+pub struct Button
+{
+    handle: i32,
+    parent: i32,
+    text: ptr
+}
+
+pub struct Label
+{
+    handle: i32,
+    parent: i32,
+    text: ptr
+}
+
+pub fn CreateMainWindow(className: ptr, windowTitle: ptr, width: i32, height: i32) -> Window
+{
+    hwnd = CreateWindowExA(
+        0, className, windowTitle, 
+        WS_OVERLAPPEDWINDOW, 
+        100, 100, width, height, 
+        0, 0, 0, 0
+    )
+    wnd = Window{handle=hwnd, title=windowTitle, width=width, height=height}
+    return wnd
+}
+
+pub fn Show(wnd: Window) -> i32
+{
+    ShowWindow(wnd.handle, 1)
+    UpdateWindow(wnd.handle)
+    return 0
+}
+
+pub fn MessageLoop() -> i32
+{
+    msg = malloc(48)  // MSG structure size
+    ret = 1
+    while(ret != 0)
+    {
+        ret = GetMessageA(msg, 0, 0, 0)
+        if(ret == -1)
+        {
+            break
+        }
+        else if(ret > 0)
+        {
+            TranslateMessage(msg)
+            DispatchMessageA(msg)
+        }
+    }
+    free(msg)
+    return 0
+}
+
+pub fn Close(wnd: Window) -> i32
+{
+    DestroyWindow(wnd.handle)
+    return 0
+}
+
+pub fn ShowMessageBox(text: ptr, caption: ptr) -> i32
+{
+    return MessageBoxA(0, text, caption, 0)
+}
+
+pub fn CreateTextLabel(parentWnd: i32, labelTxt: ptr, x: i32, y: i32, width: i32, height: i32) -> Label
+{
+    hLabel = CreateWindowExA(
+        0, "STATIC", labelTxt,
+        0x50000000 | 0x00000007,  // WS_CHILD | WS_VISIBLE | SS_LEFT
+        x, y, width, height,
+        parentWnd, IDC_STATIC, 0, 0
+    )
+    lbl = Label{handle=hLabel, parent=parentWnd, text=labelTxt}
+    return lbl
+}
+
+pub fn CreateButtonControl(parentWnd: i32, btnText: ptr, x: i32, y: i32, width: i32, height: i32, id: i32) -> Button
+{
+    hBtn = CreateWindowExA(
+        0, "BUTTON", btnText,
+        0x50000000 | 0x00000007 | 0x00010000,  // WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON
+        x, y, width, height,
+        parentWnd, id, 0, 0
+    )
+    btn = Button{handle=hBtn, parent=parentWnd, text=btnText}
+    return btn
+}
+
+pub fn HandleEvents(hWnd: i32, message: u32, wParam: i32, lParam: i32) -> i32
+{
+    if(message == WM_DESTROY)
+    {
+        PostQuitMessage(0)
+        return 0
+    }
+    return DefWindowProcA(hWnd, message, wParam, lParam)
+}
