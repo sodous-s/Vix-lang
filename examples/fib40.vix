@@ -8,5 +8,5 @@ fn fib(n: i32) ->  i64 {
 }
 fn main() ->  i32 {
     print(fib(40))
-    return  0
+    return 0
 }

@@ -122,7 +122,8 @@ typedef struct ASTNode {
         struct {
             struct ASTNode* left;
             struct ASTNode* right;
-            MutabilityType mutability; // 可变性标记
+            MutabilityType mutability; //可变性标记
+            int is_declaration;
         } assign;
         struct {
             struct ASTNode* left;
@@ -314,7 +315,7 @@ ASTNode* create_struct_literal_node_with_yyltype(ASTNode* type_name, ASTNode* fi
 ASTNode* create_global_node_with_location(ASTNode* identifier, ASTNode* type, ASTNode* initializer, Location location);
 ASTNode* create_global_node(ASTNode* identifier, ASTNode* type, ASTNode* initializer);
 ASTNode* create_global_node_with_yyltype(ASTNode* identifier, ASTNode* type, ASTNode* initializer, void* yylloc);
-ASTNode* create_import_node(const char* module_path);  // 添加import节点创建函数
+ASTNode* create_import_node(const char* module_path);
 ASTNode* create_import_node_with_location(const char* module_path, Location location);
 ASTNode* create_import_node_with_yyltype(const char* module_path, void* yylloc);
 void free_ast(ASTNode* node);

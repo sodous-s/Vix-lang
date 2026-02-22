@@ -70,6 +70,20 @@ static int is_node_struct_field_assignment(ASTNode* node, VisitedNode* visited_l
     return 0;
 }
 
+static int is_node_inside_struct_literal(ASTNode* node, VisitedNode* visited_list);
+static int is_node_inside_struct_literal(ASTNode* node, VisitedNode* visited_list) {
+    (void)node;
+
+    VisitedNode* current = visited_list;
+    while (current) {
+        if (current->node && current->node->type == AST_STRUCT_LITERAL) {
+            return 1;
+        }
+        current = current->next;
+    }
+    return 0;
+}
+
 typedef struct StructDef {
     char* name;
     ASTNode* fields;
@@ -393,6 +407,9 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
         }
         
         case AST_ASSIGN: {
+            int in_struct_def_field = is_node_struct_field_assignment(node, new_visited_list);
+            int in_struct_literal_field = is_node_inside_struct_literal(node, new_visited_list);
+
             if (node->data.assign.left && 
                 node->data.assign.left->type == AST_UNARYOP && 
                 node->data.assign.left->data.unaryop.op == OP_DEREF) {
@@ -412,7 +429,9 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
             // 检查左值（left-hand side）
             if (node->data.assign.left && node->data.assign.left->type == AST_IDENTIFIER) {
                 Symbol* existing = lookup_symbol(table, node->data.assign.left->data.identifier.name);
-                if (existing && existing->type == SYMBOL_CONSTANT) {
+                if (in_struct_def_field || in_struct_literal_field) {
+                    /* 结构体字段定义/初始化中的 left 是字段名，不是变量声明或赋值目标 */
+                } else if (existing && existing->type == SYMBOL_CONSTANT) {
                     const char* filename = current_input_filename ? current_input_filename : "unknown";
                     int line = (node->data.assign.left->location.first_line > 0) ? node->data.assign.left->location.first_line : 1;
                     char buf[256];
@@ -420,21 +439,41 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                     report_semantic_error_with_location(buf, filename, line);
                     errors_found++;
                 } else {
-                    int is_mutable = (node->data.assign.left->mutability == MUTABILITY_MUTABLE);
-                    add_symbol_with_mutability(table, node->data.assign.left->data.identifier.name, SYMBOL_VARIABLE, TYPE_UNKNOWN, is_mutable);
-                    if (node->data.assign.right && node->data.assign.right->type == AST_STRUCT_LITERAL &&
-                        node->data.assign.right->data.struct_literal.type_name &&
-                        node->data.assign.right->data.struct_literal.type_name->type == AST_IDENTIFIER) {
-                        const char* sname = node->data.assign.right->data.struct_literal.type_name->data.identifier.name;
-                        add_var_struct_mapping(node->data.assign.left->data.identifier.name, sname);
-                    }
-                    if (node->data.assign.right) {
-                        add_var_init_mapping(node->data.assign.left->data.identifier.name, node->data.assign.right);
+                    if (node->data.assign.is_declaration) {
+                        if (existing) {
+                            const char* filename = current_input_filename ? current_input_filename : "unknown";
+                            int line = (node->data.assign.left->location.first_line > 0) ? node->data.assign.left->location.first_line : 1;
+                            report_redefinition_error_with_location(node->data.assign.left->data.identifier.name, filename, line);
+                            errors_found++;
+                        } else {
+                            int is_mutable = (node->data.assign.left->mutability == MUTABILITY_MUTABLE);
+                            add_symbol_with_mutability(table, node->data.assign.left->data.identifier.name, SYMBOL_VARIABLE, TYPE_UNKNOWN, is_mutable);
+                            if (node->data.assign.right && node->data.assign.right->type == AST_STRUCT_LITERAL &&
+                                node->data.assign.right->data.struct_literal.type_name &&
+                                node->data.assign.right->data.struct_literal.type_name->type == AST_IDENTIFIER) {
+                                const char* sname = node->data.assign.right->data.struct_literal.type_name->data.identifier.name;
+                                add_var_struct_mapping(node->data.assign.left->data.identifier.name, sname);
+                            }
+                            if (node->data.assign.right) {
+                                add_var_init_mapping(node->data.assign.left->data.identifier.name, node->data.assign.right);
+                            }
+                        }
+                    } else {
+                        if (!existing) {
+                            const char* filename = current_input_filename ? current_input_filename : "unknown";
+                            int line = (node->data.assign.left->location.first_line > 0) ? node->data.assign.left->location.first_line : 1;
+                            char buf[256];
+                            snprintf(buf, sizeof(buf), "Variable '%s' must be declared with 'let' before assignment", node->data.assign.left->data.identifier.name);
+                            report_semantic_error_with_location(buf, filename, line);
+                            errors_found++;
+                        } else if (node->data.assign.right) {
+                            add_var_init_mapping(node->data.assign.left->data.identifier.name, node->data.assign.right);
+                        }
                     }
                 }
             }
             if (node->data.assign.right) {
-                if (is_node_struct_field_assignment(node, new_visited_list)) {
+                if (in_struct_def_field) {
                     if (node->data.assign.right->type == AST_IDENTIFIER) {
                         const char* type_name = node->data.assign.right->data.identifier.name;
                         StructDef* struct_def = find_struct_definition(type_name);

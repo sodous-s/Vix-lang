@@ -1,3 +1,4 @@
+
 extern "C"
 {
     fn printf(format: ptr, ...) -> i32
@@ -6,7 +7,7 @@ extern "C"
 }
 fn main() ->i32
 {
-    a = malloc(10)
+    let a = malloc(10)
     for (i in 0 .. 10)
     {
         a[i] = i * i

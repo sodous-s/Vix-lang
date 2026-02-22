@@ -1,8 +1,8 @@
 fn fib(n: i32) ->  i64 {
-    a = 0
-    b = 1
+    let a = 0
+    let b = 1
     for (i in  1 ..  n) {
-        c =  a +  b
+        let c =  a +  b
         a =  b
         b =  c
     }

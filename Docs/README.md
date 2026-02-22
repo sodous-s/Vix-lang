@@ -41,17 +41,17 @@ print("Hello,world!")
 ### 变量声明
 
 ```vix
-a = "Hello"
-b = 123
-c = 3.14
+let a = "Hello"
+let b = 123
+let c = 3.14
 ```
 
 ### 类型标注
 
 ```vix
-a: i32 = 10
-b: f64 = 3.14
-c: string = "Hello"
+let a: i32 = 10
+let b: f64 = 3.14
+let c: string = "Hello"
 ```
 
 ### 基本类型
@@ -121,7 +121,7 @@ if (a == "10") {
 ### while循环
 
 ```vix
-a = 0
+let a = 0
 while (a <= 10) {
     print(a)
     a += 1
@@ -147,8 +147,8 @@ for (x in 1 .. 3) {
 ### 逻辑运算符
 
 ```vix
-a = 10
-b = 20
+let a = 10
+let b = 20
 if (a == 10 or b == 20) {
     print("a is 10 or b is 20")
 }
@@ -163,7 +163,7 @@ if (a == 10 and b == 20) {
 
 ```vix
 // 数组声明
-a: [i32 * 5] = [1, 2, 3, 4, 5]
+let a: [i32 * 5] = [1, 2, 3, 4, 5]
 
 // 访问数组元素
 print(a[0])  // 1
@@ -255,52 +255,11 @@ fn main() -> i32 {
     return 0
 }
 ```
-
-## 面向对象编程
-
-### 对象定义
-
-```vix
-obj PersonA(age: i32, name: string) {
-    field age = age
-    field name = name
-    
-    hello(self) {
-        print("ciallo ! my name is " + self.name)
-    }
-    
-    out_age(self) {
-        print("I am " + self.age + " years old")
-    }
-}
-```
-
-### 接口实现
-
-```vix
-impl PersonA -> public {
-    hello as greeting,
-    out_age as age
-}
-```
-
-### 对象使用
-
-```vix
-fn main() -> i32 {
-    obj p = PersonA(20, "john")
-    p.greeting()
-    p.age()
-    return 0
-}
-```
-
 ## 指针
 
 ### 取地址与解引用
 
 ```vix
-// 取地址：&
 x = 10
 mut ptr = &x  // 获取 x 的地址，赋值需要加上 mut 修饰符
 

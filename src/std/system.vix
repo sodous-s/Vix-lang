@@ -1,5 +1,0 @@
-extern "C"
-{
-    fn system(command: ptr) -> i32
-    fn exit(status: i32) -> void
-}

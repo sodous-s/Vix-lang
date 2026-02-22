@@ -114,6 +114,7 @@ char* process_escape_sequences(const char* input, size_t input_len) {
 "fn"                { UPDATE_COLUMN(); yylval.str = strdup(yytext); return FN; }
 "extern"            { UPDATE_COLUMN(); yylval.str = strdup(yytext); return EXTERN; }
 "const"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return CONST; }
+"let"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return LET; }
 "mut"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return MUT; }
 "->"                { UPDATE_COLUMN(); yylval.str = strdup(yytext); return ARROW; }
 "i32"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I32; }

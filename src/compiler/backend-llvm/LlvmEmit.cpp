@@ -24,8 +24,21 @@ vix0.0.1 released!
 #include <stack>
 #include <iostream>
 #include <cstdint>
+#include <cstdlib>
 
 using namespace llvm;
+
+static bool isVixDebugEnabled() {//通过环境变量控制调试输出
+    const char* value = std::getenv("VIX_DEBUG");
+    if (!value || value[0] == '\0') return false;
+    return strcmp(value, "0") != 0 && strcmp(value, "false") != 0 && strcmp(value, "off") != 0;
+}
+
+static raw_ostream& vixDebugStream() {
+    return isVixDebugEnabled() ? llvm::errs() : llvm::nulls();
+}
+
+#define VIX_DEBUG_LOG vixDebugStream()
 
 // ==================== TYPES ====================
 enum class ValueType {
@@ -481,12 +494,12 @@ private:
         }
 
         if (typeHelper.isStringVariable(varName)) {
-            llvm::errs() << "[DEBUG] String variable '" << varName << "': using i8 as element type\n";
+            VIX_DEBUG_LOG << "[DEBUG] String variable '" << varName << "': using i8 as element type\n";
             return Type::getInt8Ty(context);
         }
 
         if (varName == "argv") {
-            llvm::errs() << "[DEBUG] argv: using char** as element type\n";
+            VIX_DEBUG_LOG << "[DEBUG] argv: using char** as element type\n";
             return PointerType::getUnqual(Type::getInt8Ty(context));
         }
 
@@ -497,14 +510,14 @@ private:
             if (allocatedType && allocatedType->isArrayTy()) {
                 ArrayType* arrType = cast<ArrayType>(allocatedType);
                 Type* elemType = arrType->getElementType();
-                llvm::errs() << "[DEBUG] Local array '" << varName
+                VIX_DEBUG_LOG << "[DEBUG] Local array '" << varName
                              << "': using element type from alloc: " << *elemType << "\n";
                 return elemType;
             }
         }
 
         if (auto* arrayInfo = typeHelper.getArrayTypeInfo(varName)) {
-            llvm::errs() << "[DEBUG] Array variable '" << varName
+            VIX_DEBUG_LOG << "[DEBUG] Array variable '" << varName
                          << "': using element type from array info: " << *arrayInfo->first << "\n";
             return arrayInfo->first;
         }
@@ -514,7 +527,7 @@ private:
             if (globalType->isArrayTy()) {
                 ArrayType* arrType = cast<ArrayType>(globalType);
                 Type* elemType = arrType->getElementType();
-                llvm::errs() << "[DEBUG] Global array '" << varName
+                VIX_DEBUG_LOG << "[DEBUG] Global array '" << varName
                              << "': using element type from global: " << *elemType << "\n";
                 return elemType;
             }
@@ -524,12 +537,12 @@ private:
             varName.find("Str") != std::string::npos ||
             varName.find("STRING") != std::string::npos ||
             varName.find("lit") != std::string::npos) {
-            llvm::errs() << "[DEBUG] Variable '" << varName
+            VIX_DEBUG_LOG << "[DEBUG] Variable '" << varName
                          << "' looks like a string: using i8\n";
             return Type::getInt8Ty(context);
         }
 
-        llvm::errs() << "[DEBUG] Unknown pointer '" << varName
+        VIX_DEBUG_LOG << "[DEBUG] Unknown pointer '" << varName
                      << "': defaulting to i8\n";
         return Type::getInt8Ty(context);
     }
@@ -771,7 +784,7 @@ public:
         
         // 如果是字符串变量，需要正确处理
         if (isStringVar) {
-            llvm::errs() << "[DEBUG] String variable '" << name << "' loading value\n";
+            VIX_DEBUG_LOG << "[DEBUG] String variable '" << name << "' loading value\n";
             Value* val = builder.CreateLoad(allocatedType, alloc, name);
             // 对于字符串，返回的是指向字符数组或字符指针的值
             ValueType vt = typeHelper.getValueTypeFromType(allocatedType);
@@ -1767,7 +1780,7 @@ public:
             return VisitResult();
         }
         
-        llvm::errs() << "[DEBUG] For loop end value type: " << *end_val.value->getType() << "\n";
+        VIX_DEBUG_LOG << "[DEBUG] For loop end value type: " << *end_val.value->getType() << "\n";
         AllocaInst* var_alloc = scopeManager.findVariable(var_name);
         if (!var_alloc) {
             BasicBlock* entryBB = &func->getEntryBlock();
@@ -1794,7 +1807,7 @@ public:
         builder.SetInsertPoint(condBB);
         Value* cur_val = builder.CreateLoad(Type::getInt32Ty(context), var_alloc, var_name);
         Value* cond = builder.CreateICmpSLT(cur_val, end_val_casted, "forcond");
-        llvm::errs() << "[DEBUG] for cond: " << *cur_val->getType()
+        VIX_DEBUG_LOG << "[DEBUG] for cond: " << *cur_val->getType()
                      << " < " << *end_val_casted->getType() << "\n";
         func->insert(func->end(), loopBB);
         func->insert(func->end(), incBB);
@@ -1881,8 +1894,16 @@ public:
                                         paramTypes.push_back(PointerType::getUnqual(Type::getInt8Ty(context)));
                                         typeHelper.registerArrayType(paramName, Type::getInt32Ty(context), -1);
                                     }
+                                } else if (right->type == AST_TYPE_LIST || right->type == AST_TYPE_FIXED_SIZE_LIST) {
+                                    Type* elemType = typeHelper.getArrayElementTypeFromNode(right);
+                                    int elemCount = typeHelper.getArrayElementCountFromNode(right);
+                                    paramType = ValueType::POINTER;
+                                    paramTypes.push_back(PointerType::getUnqual(elemType));
+                                    typeHelper.registerArrayType(paramName, elemType, elemCount > 0 ? elemCount : -1);
                                 } else {
-                                    paramTypes.push_back(typeHelper.getLLVMType(paramType));
+                                    Type* llvmParamType = typeHelper.getTypeFromTypeNode(right);
+                                    paramType = typeHelper.getValueTypeFromType(llvmParamType);
+                                    paramTypes.push_back(llvmParamType);
                                 }
                             } else {
                                 paramTypes.push_back(Type::getInt32Ty(context));
@@ -1926,21 +1947,7 @@ public:
         for (auto& arg : func->args()) {
             if (idx < paramNames.size()) {
                 arg.setName(paramNames[idx]);
-                Type* paramAllocType = nullptr;
-                if (idx < paramValueTypes.size()) {
-                    ValueType vt = paramValueTypes[idx];
-                    if (vt == ValueType::POINTER || vt == ValueType::STRING) {
-                        if (funcName == "main" && paramNames[idx] == "argv") {
-                            paramAllocType = PointerType::getUnqual(PointerType::getUnqual(Type::getInt8Ty(context)));
-                        } else {
-                            paramAllocType = PointerType::getUnqual(Type::getInt8Ty(context));
-                        }
-                    } else {
-                        paramAllocType = typeHelper.getLLVMType(vt);
-                    }
-                } else {
-                    paramAllocType = arg.getType();
-                }
+                Type* paramAllocType = arg.getType();
                 
                 AllocaInst* alloc = builder.CreateAlloca(paramAllocType, nullptr, paramNames[idx]);
                 builder.CreateStore(&arg, alloc);
@@ -2191,23 +2198,23 @@ public:
         
         if (object->type == AST_IDENTIFIER) {
             std::string varName(object->data.identifier.name);
-            llvm::errs() << "[DEBUG] to geet length of variable: " << varName << "\n";
+            VIX_DEBUG_LOG << "[DEBUG] to geet length of variable: " << varName << "\n";
             
             AllocaInst* alloc = scopeManager.findVariable(varName);
-            llvm::errs() << "[DEBUG] found in scopeMar: " << (alloc ? "yes" : "no") << "\n";
+            VIX_DEBUG_LOG << "[DEBUG] found in scopeMar: " << (alloc ? "yes" : "no") << "\n";
             
             if (!alloc) {
                 alloc = findVariableInMain(varName);
-                llvm::errs() << "[DEBUG] found in main: " << (alloc ? "yes" : "no") << "\n";
+                VIX_DEBUG_LOG << "[DEBUG] found in main: " << (alloc ? "yes" : "no") << "\n";
             }
             if (alloc) {
                 Type* allocatedType = getActualType(alloc);
-                llvm::errs() << "[DEBUG] type: " << *allocatedType << "\n";
+                VIX_DEBUG_LOG << "[DEBUG] type: " << *allocatedType << "\n";
                 if (allocatedType && allocatedType->isArrayTy()) {
                     ArrayType* arrayType = cast<ArrayType>(allocatedType);
                     uint64_t numElements = arrayType->getNumElements();
                     Value* length = ConstantInt::get(Type::getInt32Ty(context), numElements);
-                    llvm::errs() << "[DEBUG] Arr length (s): " << numElements << "\n";
+                    VIX_DEBUG_LOG << "[DEBUG] Arr length (s): " << numElements << "\n";
                     return VisitResult(length, ValueType::INT32);
                 }
                 if (allocatedType && allocatedType->isPointerTy()) {
@@ -2216,7 +2223,7 @@ public:
                         int elementCount = arrayInfo->second;
                         if (elementCount > 0) {
                             Value* length = ConstantInt::get(Type::getInt32Ty(context), elementCount);
-                            llvm::errs() << "[DEBUG] Array length (r): " << elementCount << "\n";
+                            VIX_DEBUG_LOG << "[DEBUG] Array length (r): " << elementCount << "\n";
                             return VisitResult(length, ValueType::INT32);
                         }
                     }
@@ -2224,10 +2231,10 @@ public:
                         Value* strPtr = builder.CreateLoad(allocatedType, alloc, varName);
                         CallInst* strlenCall = builder.CreateCall(strlenFunction, {strPtr}, "strlen");
                         Value* length = builder.CreateIntCast(strlenCall, Type::getInt32Ty(context), false, "len");
-                        llvm::errs() << "[DEBUG] String length (strlen): dynamic\n";
+                        VIX_DEBUG_LOG << "[DEBUG] String length (strlen): dynamic\n";
                         return VisitResult(length, ValueType::INT32);
                     }
-                    llvm::errs() << "[DEBUG] Unknown pointer type, returning 0\n";
+                    VIX_DEBUG_LOG << "[DEBUG] Unknown pointer type, returning 0\n";
                     Value* length = ConstantInt::get(Type::getInt32Ty(context), 0);
                     return VisitResult(length, ValueType::INT32);
                 }
@@ -2236,7 +2243,7 @@ public:
             if (arrayInfo) {
                 int elementCount = arrayInfo->second;
                 Value* length = ConstantInt::get(Type::getInt32Ty(context), elementCount);
-                llvm::errs() << "[DEBUG] Array length (type info): " << elementCount << "\n";
+                VIX_DEBUG_LOG << "[DEBUG] Array length (type info): " << elementCount << "\n";
                 return VisitResult(length, ValueType::INT32);
             }
             if (typeHelper.isStringVariable(varName)) {
@@ -2248,7 +2255,7 @@ public:
                     Value* strPtr = builder.CreateLoad(allocatedType, varAlloc, varName);
                     CallInst* strlenCall = builder.CreateCall(strlenFunction, {strPtr}, "strlen");
                     Value* length = builder.CreateIntCast(strlenCall, Type::getInt32Ty(context), false, "len");
-                    llvm::errs() << "[DEBUG] String length (strlen from isStringVariable): dynamic\n";
+                    VIX_DEBUG_LOG << "[DEBUG] String length (strlen from isStringVariable): dynamic\n";
                     return VisitResult(length, ValueType::INT32);
                 }
             }
@@ -2256,7 +2263,7 @@ public:
         if (object->type == AST_EXPRESSION_LIST) {
             int count = object->data.expression_list.expression_count;
             Value* length = ConstantInt::get(Type::getInt32Ty(context), count);
-            llvm::errs() << "[DEBUG] Literal length: " << count << "\n";
+            VIX_DEBUG_LOG << "[DEBUG] Literal length: " << count << "\n";
             return VisitResult(length, ValueType::INT32);
         }
         
@@ -2706,7 +2713,7 @@ public:
                     
                     Value* charVal = builder.CreateLoad(Type::getInt8Ty(context), charPtr, "char");
                     
-                    llvm::errs() << "[DEBUG] string index: " << varName << "[i] = char (i8)\n";
+                    VIX_DEBUG_LOG << "[DEBUG] string index: " << varName << "[i] = char (i8)\n";
                     
                     return VisitResult(charVal, ValueType::INT8);
                 }
