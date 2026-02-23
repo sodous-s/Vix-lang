@@ -123,6 +123,9 @@ statement
     | IMPORT STRING SEMICOLON { $$ = create_import_node_with_yyltype($2, (YYLTYPE*) &@$); }
     | IMPORT STRING { $$ = create_import_node_with_yyltype($2, (YYLTYPE*) &@$); }
     | CONST identifier ASSIGN expression SEMICOLON { $$ = create_const_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
+    | CONST identifier COLON type ASSIGN expression SEMICOLON { $$ = create_const_node_with_yyltype($2, $6, (YYLTYPE*) &@$); }
+    | LET CONST identifier ASSIGN expression SEMICOLON { $$ = create_const_node_with_yyltype($3, $5, (YYLTYPE*) &@$); }
+    | LET CONST identifier COLON type ASSIGN expression SEMICOLON { $$ = create_const_node_with_yyltype($3, $7, (YYLTYPE*) &@$); }
     | GLOBAL identifier ASSIGN expression SEMICOLON { $$ = create_global_node_with_yyltype($2, NULL, $4, (YYLTYPE*) &@$); }
     | GLOBAL identifier COLON type ASSIGN expression SEMICOLON { $$ = create_global_node_with_yyltype($2, $4, $6, (YYLTYPE*) &@$); }
     | compound_assignment_statement SEMICOLON { $$ = $1; }
@@ -166,6 +169,9 @@ statement
     | expression SEMICOLON         { $$ = $1; }
     | expression                   { $$ = $1; }
     | CONST identifier ASSIGN expression { $$ = create_const_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
+    | CONST identifier COLON type ASSIGN expression { $$ = create_const_node_with_yyltype($2, $6, (YYLTYPE*) &@$); }
+    | LET CONST identifier ASSIGN expression { $$ = create_const_node_with_yyltype($3, $5, (YYLTYPE*) &@$); }
+    | LET CONST identifier COLON type ASSIGN expression { $$ = create_const_node_with_yyltype($3, $7, (YYLTYPE*) &@$); }
     | GLOBAL identifier ASSIGN expression { $$ = create_global_node_with_yyltype($2, NULL, $4, (YYLTYPE*) &@$); }
     | GLOBAL identifier COLON type ASSIGN expression { $$ = create_global_node_with_yyltype($2, $4, $6, (YYLTYPE*) &@$); }
     | identifier COLON expression { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
@@ -414,6 +420,7 @@ input_statement
 
 block_statement
     : LBRACE statement_list RBRACE { $$ = $2; }
+    | LBRACE RBRACE { $$ = create_program_node_with_yyltype((YYLTYPE*) &@$); }
     | statement                    { $$ = $1; }
     ;
 

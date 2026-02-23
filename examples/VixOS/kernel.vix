@@ -1,0 +1,57 @@
+#[no_std]
+#[no_main]
+
+const MULTIBOOT2_MAGIC = 0xE85250D6
+const MULTIBOOT2_ARCH = 0
+const MULTIBOOT2_HEADER_LENGTH = 24
+
+#[repr(C)]
+struct multiboot2_header {
+    magic: u32,
+    architecture: u32,
+    header_length: u32,
+    checksum: u32,
+    tag_type: u32,
+    tag_flags: u32,
+    tag_size: u32
+}
+
+#[link_section = ".text.boot"]
+#[export]
+const multiboot_header: multiboot2_header = multiboot2_header{
+    magic: MULTIBOOT2_MAGIC,
+    architecture: MULTIBOOT2_ARCH,
+    header_length: MULTIBOOT2_HEADER_LENGTH,
+    checksum: -(MULTIBOOT2_MAGIC + MULTIBOOT2_ARCH + MULTIBOOT2_HEADER_LENGTH),
+    tag_type: 0,
+    tag_flags: 0,
+    tag_size: 8
+}
+
+const VGA_BUFFER = 0xB8000
+const VGA_WIDTH = 80
+const VGA_HEIGHT = 25
+const WHITE_ON_BLACK = 0x07
+
+fn write_string(strs: ptr) {
+    let fb: ptr = 0xB8000
+    let i = 0
+    
+    while (strs[i] != 0) {
+        let addr: ptr = fb + i * 2
+        addr[0] = strs[i]
+        addr[1] = 7
+        i = i + 1
+    }
+}
+
+#[export]
+fn kernel_main() {
+    write_string("Hello VixOS!")
+    while (1) {}
+}
+
+#[export]
+fn _start() {
+    kernel_main()
+}

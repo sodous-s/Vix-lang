@@ -4,11 +4,11 @@ extern "C"
 }
 fn strcmp(a:ptr,b:ptr) ->i32
 {
-    i = 0
+    let i = 0
     while(1)
     {
-        ca = a[i]
-        cb = b[i]
+        let ca = a[i]
+        let cb = b[i]
         if (ca != cb)
         {
             return ca - cb
@@ -17,7 +17,7 @@ fn strcmp(a:ptr,b:ptr) ->i32
         {
             return 0
         }
-        i = i + 1
+        i += 1
     }
 }
 fn main(argc:i32, argv:ptr) ->i32

@@ -105,6 +105,8 @@ char* process_escape_sequences(const char* input, size_t input_len) {
                       }
                       } 
 
+"#"[ \t]*"["[^]\n]*"]" { UPDATE_COLUMN(); }
+
 "print"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return PRINT; }
 "input"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return INPUT; }
 "toint"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TOINT; }
@@ -118,8 +120,11 @@ char* process_escape_sequences(const char* input, size_t input_len) {
 "mut"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return MUT; }
 "->"                { UPDATE_COLUMN(); yylval.str = strdup(yytext); return ARROW; }
 "i32"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I32; }
+"u32"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I32; }
 "i64"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I64; }
+"u64"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I64; }
 "i8"                { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I8; }
+"u8"                { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_I8; }
 "f32"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_F32; }
 "f64"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_F64; }
 "str"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_STR; }
@@ -184,6 +189,16 @@ char* process_escape_sequences(const char* input, size_t input_len) {
                         yylloc.last_column = col + yyleng - 1;
                         return IDENTIFIER;
                       }
+
+0[xX][0-9a-fA-F]+   {
+                                                int col = GET_FIRST_COLUMN();
+                                                yylval.num_int = strtoll(yytext, NULL, 16);
+                                                yylloc.first_line = yylineno;
+                                                yylloc.first_column = col;
+                                                yylloc.last_line = yylineno;
+                                                yylloc.last_column = col + yyleng - 1;
+                                                return NUMBER_INT;
+                                            }
 
 [0-9]+              {
                         int col = GET_FIRST_COLUMN();

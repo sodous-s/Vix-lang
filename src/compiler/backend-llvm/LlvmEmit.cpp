@@ -25,8 +25,90 @@ vix0.0.1 released!
 #include <iostream>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 
 using namespace llvm;
+
+extern "C" const char* current_input_filename;
+
+static std::string g_vix_target_triple;
+
+struct SymbolAttr {
+    bool exported = false;
+    std::string section;
+};
+
+struct SourceAttrInfo {
+    bool noMain = false;
+    bool noStd = false;
+    std::map<std::string, SymbolAttr> functionAttrs;
+    std::map<std::string, SymbolAttr> constAttrs;
+};
+
+static std::string trimCopy(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && (s[start] == ' ' || s[start] == '\t' || s[start] == '\r' || s[start] == '\n')) start++;
+    size_t end = s.size();
+    while (end > start && (s[end - 1] == ' ' || s[end - 1] == '\t' || s[end - 1] == '\r' || s[end - 1] == '\n')) end--;
+    return s.substr(start, end - start);
+}
+
+static SourceAttrInfo parseSourceAttributes(const char* filePath) {
+    SourceAttrInfo info;
+    if (!filePath) return info;
+
+    std::ifstream in(filePath);
+    if (!in.is_open()) return info;
+
+    SymbolAttr pending;
+    bool hasPending = false;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string t = trimCopy(line);
+        if (t.empty()) continue;
+
+        if (t == "#[no_main]") { info.noMain = true; continue; }
+        if (t == "#[no_std]") { info.noStd = true; continue; }
+        if (t == "#[export]") { pending.exported = true; hasPending = true; continue; }
+
+        if (t.rfind("#[link_section", 0) == 0) {
+            size_t q1 = t.find('"');
+            size_t q2 = t.rfind('"');
+            if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1) {
+                pending.section = t.substr(q1 + 1, q2 - q1 - 1);
+                hasPending = true;
+            }
+            continue;
+        }
+
+        if (t.rfind("pub fn ", 0) == 0 || t.rfind("fn ", 0) == 0) {
+            size_t fnPos = t.rfind("fn ");
+            size_t nameStart = fnPos + 3;
+            size_t nameEnd = t.find('(', nameStart);
+            if (nameEnd != std::string::npos && hasPending) {
+                std::string name = trimCopy(t.substr(nameStart, nameEnd - nameStart));
+                if (!name.empty()) info.functionAttrs[name] = pending;
+            }
+            pending = SymbolAttr();
+            hasPending = false;
+            continue;
+        }
+
+        if (t.rfind("const ", 0) == 0) {
+            size_t nameStart = 6;
+            size_t nameEnd = t.find_first_of(" :={", nameStart);
+            if (nameEnd != std::string::npos && hasPending) {
+                std::string name = trimCopy(t.substr(nameStart, nameEnd - nameStart));
+                if (!name.empty()) info.constAttrs[name] = pending;
+            }
+            pending = SymbolAttr();
+            hasPending = false;
+            continue;
+        }
+    }
+
+    return info;
+}
 
 static bool isVixDebugEnabled() {//通过环境变量控制调试输出
     const char* value = std::getenv("VIX_DEBUG");
@@ -365,6 +447,23 @@ public:
             return builder.CreateFPToSI(val, getLLVMType(to), "ftoi");
         if (from == ValueType::FLOAT64 && (to == ValueType::INT32 || to == ValueType::INT64 || to == ValueType::INT8))
             return builder.CreateFPToSI(val, getLLVMType(to), "ftoi");
+
+        if ((from == ValueType::INT32 || from == ValueType::INT64 || from == ValueType::INT8 || from == ValueType::BOOL) &&
+            to == ValueType::POINTER) {
+            Value* intVal = val;
+            if (!intVal->getType()->isIntegerTy(64)) {
+                intVal = builder.CreateSExtOrTrunc(intVal, Type::getInt64Ty(context), "int_to_ptr_int64");
+            }
+            return builder.CreateIntToPtr(intVal, PointerType::getUnqual(Type::getInt8Ty(context)), "int_to_ptr");
+        }
+
+        if (from == ValueType::POINTER && (to == ValueType::INT64 || to == ValueType::INT32)) {
+            Value* intVal = builder.CreatePtrToInt(val, Type::getInt64Ty(context), "ptr_to_int64");
+            if (to == ValueType::INT32) {
+                return builder.CreateTrunc(intVal, Type::getInt32Ty(context), "ptr_to_int32");
+            }
+            return intVal;
+        }
         
         if ((from == ValueType::POINTER && to == ValueType::STRING) ||
             (from == ValueType::STRING && to == ValueType::POINTER))
@@ -399,6 +498,7 @@ private:
     Function* strlenFunction;
     bool isGlobalScope;
     bool mainFunctionCreated;
+    SourceAttrInfo sourceAttrs;
     
     bool ensureValidInsertPoint() {
         BasicBlock* currentBB = builder.GetInsertBlock();
@@ -546,6 +646,133 @@ private:
                      << "': defaulting to i8\n";
         return Type::getInt8Ty(context);
     }
+
+    Constant* evaluateConstExpr(ASTNode* node, ValueType* outType = nullptr) {
+        if (!node) {
+            if (outType) *outType = ValueType::INT32;
+            return ConstantInt::get(Type::getInt32Ty(context), 0);
+        }
+
+        switch (node->type) {
+            case AST_NUM_INT: {
+                int64_t val = node->data.num_int.value;
+                if (val >= -2147483648LL && val <= 2147483647LL) {
+                    if (outType) *outType = ValueType::INT32;
+                    return ConstantInt::get(Type::getInt32Ty(context), static_cast<int32_t>(val), true);
+                }
+                if (outType) *outType = ValueType::INT64;
+                return ConstantInt::get(Type::getInt64Ty(context), static_cast<uint64_t>(val), true);//注意LLVM的ConstantInt::get对于64位整数需要传入uint64_t类型的值 即使是有符号的负数也要转换为对应的无符号表示
+            }
+            case AST_CHAR: {
+                if (outType) *outType = ValueType::INT8;
+                return ConstantInt::get(Type::getInt8Ty(context), static_cast<int8_t>(node->data.character.value), true);
+            }
+            case AST_IDENTIFIER: {
+                if (!node->data.identifier.name) return nullptr;
+                GlobalVariable* gv = module->getGlobalVariable(node->data.identifier.name, true);
+                if (!gv) return nullptr;
+                Constant* init = gv->getInitializer();
+                if (!init) return nullptr;
+                if (outType) *outType = typeHelper.getValueTypeFromType(init->getType());
+                return init;
+            }
+            case AST_UNARYOP: {
+                Constant* rhs = evaluateConstExpr(node->data.unaryop.expr, outType);
+                if (!rhs) return nullptr;
+                if (node->data.unaryop.op == OP_PLUS) return rhs;
+                if (node->data.unaryop.op == OP_MINUS) {
+                    if (auto* ci = dyn_cast<ConstantInt>(rhs)) {
+                        int64_t value = ci->getSExtValue();
+                        int bits = ci->getType()->isIntegerTy(64) ? 64 : 32;
+                        if (outType) *outType = (bits == 64) ? ValueType::INT64 : ValueType::INT32;
+                        if (bits == 64) {
+                            return ConstantInt::get(Type::getInt64Ty(context), static_cast<uint64_t>(-value), true);
+                        }
+                        return ConstantInt::get(Type::getInt32Ty(context), static_cast<int32_t>(-value), true);
+                    }
+                    return nullptr;
+                }
+                return nullptr;
+            }
+            case AST_BINOP: {
+                ValueType lt = ValueType::INT32;
+                ValueType rt = ValueType::INT32;
+                Constant* lhs = evaluateConstExpr(node->data.binop.left, &lt);
+                Constant* rhs = evaluateConstExpr(node->data.binop.right, &rt);
+                if (!lhs || !rhs) return nullptr;
+                auto* li = dyn_cast<ConstantInt>(lhs);
+                auto* ri = dyn_cast<ConstantInt>(rhs);
+                if (!li || !ri) return nullptr;
+                int64_t lv = li->getSExtValue();
+                int64_t rv = ri->getSExtValue();
+                int bits = (li->getType()->isIntegerTy(64) || ri->getType()->isIntegerTy(64)) ? 64 : 32;
+                int64_t result = 0;
+                switch (node->data.binop.op) {
+                    case OP_ADD: result = lv + rv; break;
+                    case OP_SUB: result = lv - rv; break;
+                    case OP_MUL: result = lv * rv; break;
+                    case OP_DIV: result = (rv == 0) ? 0 : (lv / rv); break;
+                    case OP_MOD: result = (rv == 0) ? 0 : (lv % rv); break;
+                    default: return nullptr;
+                }
+                if (bits == 64) {
+                    if (outType) *outType = ValueType::INT64;
+                    return ConstantInt::get(Type::getInt64Ty(context), static_cast<uint64_t>(result), true);
+                }
+                if (outType) *outType = ValueType::INT32;
+                return ConstantInt::get(Type::getInt32Ty(context), static_cast<int32_t>(result), true);
+            }
+            case AST_STRUCT_LITERAL: {
+                ASTNode* typeNameNode = node->data.struct_literal.type_name;
+                if (!typeNameNode || typeNameNode->type != AST_IDENTIFIER || !typeNameNode->data.identifier.name) {
+                    return nullptr;
+                }
+
+                std::string structName(typeNameNode->data.identifier.name);
+                StructType* st = typeHelper.getStructType(structName);
+                auto* fields = typeHelper.getStructFields(structName);
+                if (!st || !fields) return nullptr;
+
+                std::vector<Constant*> values(fields->size(), nullptr);
+                for (size_t i = 0; i < fields->size(); ++i) {
+                    values[i] = Constant::getNullValue((*fields)[i].second);
+                }
+
+                ASTNode* initFields = node->data.struct_literal.fields;
+                if (initFields && initFields->type == AST_EXPRESSION_LIST) {
+                    int count = initFields->data.expression_list.expression_count;
+                    for (int i = 0; i < count; ++i) {
+                        ASTNode* entry = initFields->data.expression_list.expressions[i];
+                        if (!entry || entry->type != AST_ASSIGN || !entry->data.assign.left || !entry->data.assign.right) continue;
+                        ASTNode* left = entry->data.assign.left;
+                        if (left->type != AST_IDENTIFIER || !left->data.identifier.name) continue;
+
+                        std::string fieldName(left->data.identifier.name);
+                        int fieldIdx = typeHelper.getFieldIndex(structName, fieldName);
+                        if (fieldIdx < 0 || static_cast<size_t>(fieldIdx) >= fields->size()) continue;
+
+                        Constant* c = evaluateConstExpr(entry->data.assign.right, nullptr);
+                        if (!c) continue;
+                        Type* fty = (*fields)[fieldIdx].second;
+                        if (c->getType() != fty) {
+                            if (c->getType()->isIntegerTy() && fty->isIntegerTy()) {
+                                int64_t v = cast<ConstantInt>(c)->getSExtValue();
+                                c = ConstantInt::get(fty, static_cast<uint64_t>(v), true);
+                            } else {
+                                continue;
+                            }
+                        }
+                        values[fieldIdx] = c;
+                    }
+                }
+
+                if (outType) *outType = ValueType::POINTER;
+                return ConstantStruct::get(st, values);
+            }
+            default:
+                return nullptr;
+        }
+    }
     
 public:
     struct VisitResult {
@@ -560,12 +787,13 @@ public:
     
     LLVMCodeGenerator() : builder(context), typeHelper(context) {
         module = std::make_unique<Module>("VixModule", context);
-        std::string Triple = sys::getProcessTriple();
+        std::string Triple = g_vix_target_triple.empty() ? sys::getProcessTriple() : g_vix_target_triple;
         module->setTargetTriple(Triple);
         printfFunction = nullptr;
         strlenFunction = nullptr;
         isGlobalScope = true;
         mainFunctionCreated = false;
+        sourceAttrs = parseSourceAttributes(current_input_filename);
         initTarget();
     }
     
@@ -578,7 +806,7 @@ public:
         
         bool hasMain = module->getFunction("main") != nullptr;
         
-        if (!hasMain && !mainFunctionCreated) {
+        if (!hasMain && !mainFunctionCreated && !sourceAttrs.noMain) {
             createDefaultMain();
         }
         Function* mainFunc = module->getFunction("main");
@@ -676,6 +904,7 @@ public:
             case AST_INPUT:        return visitInput(node);
             case AST_TOINT:        return visitToInt(node);
             case AST_TOFLOAT:      return visitToFloat(node);
+            case AST_CONST:        return visitConst(node);
             case AST_STRUCT_DEF:   return visitStructDef(node);
             case AST_STRUCT_LITERAL: return visitStructLiteral(node);
             case AST_MEMBER_ACCESS: return visitMemberAccess(node);
@@ -1436,6 +1665,31 @@ public:
                 builder.CreateStore(casted, gep);
                 return VisitResult(casted, vt);
             }
+
+            if (allocatedType && allocatedType->isIntegerTy()) {
+                Value* baseInt = builder.CreateLoad(allocatedType, baseAlloc, "addr_base");
+                if (!baseInt->getType()->isIntegerTy(64)) {
+                    baseInt = builder.CreateSExtOrTrunc(baseInt, Type::getInt64Ty(context), "addr_base64");
+                }
+                Value* idx64 = idxVal;
+                if (!idx64->getType()->isIntegerTy(64)) {
+                    idx64 = builder.CreateSExtOrTrunc(idx64, Type::getInt64Ty(context), "idx64");
+                }
+
+                VisitResult rightVal = visit(node->data.assign.right);
+                if (!rightVal.value) return VisitResult();
+
+                Type* elemType = Type::getInt8Ty(context);
+                ValueType vt = ValueType::INT8;
+                Value* basePtr = builder.CreateIntToPtr(baseInt, PointerType::getUnqual(elemType), "mmio_ptr");
+                Value* gep = builder.CreateInBoundsGEP(elemType, basePtr, idx64, "mmio_index_ptr");
+                Value* casted = typeHelper.castValue(builder, rightVal.value, rightVal.type, vt);
+                if (!casted->getType()->isIntegerTy(8)) {
+                    casted = builder.CreateIntCast(casted, Type::getInt8Ty(context), true, "mmio_i8");
+                }
+                builder.CreateStore(casted, gep);
+                return VisitResult(casted, vt);
+            }
         }
 
         VisitResult targRes = visit(target);
@@ -1931,6 +2185,15 @@ public:
         bool isVarArg = node->data.function.vararg == 1;
         FunctionType* funcType = FunctionType::get(returnType, paramTypes, isVarArg);
         Function* func = Function::Create(funcType, Function::ExternalLinkage, funcName, module.get());
+        auto fit = sourceAttrs.functionAttrs.find(funcName);
+        if (fit != sourceAttrs.functionAttrs.end()) {
+            if (!fit->second.section.empty()) {
+                func->setSection(fit->second.section);
+            }
+            if (fit->second.exported) {
+                func->setLinkage(GlobalValue::ExternalLinkage);
+            }
+        }//对于声明但未定义的外部函数，直接返回函数对象，不生成函数体
         if (node->data.function.is_extern && node->data.function.body == NULL) {
             return VisitResult(func, returnValueType);
         }
@@ -2593,6 +2856,65 @@ public:
         return VisitResult(gep, ValueType::ARRAY);
     }
 
+    VisitResult visitConst(ASTNode* node) {
+        if (!node || !node->data.assign.left || !node->data.assign.right) return VisitResult();
+        if (node->data.assign.left->type != AST_IDENTIFIER || !node->data.assign.left->data.identifier.name) return VisitResult();
+
+        std::string name(node->data.assign.left->data.identifier.name);
+        Function* curFunc = getCurrentFunction();
+
+        if (!curFunc) {
+            GlobalVariable* existing = module->getGlobalVariable(name, true);
+            if (existing) {
+                Type* vt = existing->getValueType();
+                return VisitResult(existing, typeHelper.getValueTypeFromType(vt));
+            }
+
+            ValueType constType = ValueType::INT32;
+            Constant* initConst = evaluateConstExpr(node->data.assign.right, &constType);
+            Type* llvmTy = initConst ? initConst->getType() : Type::getInt32Ty(context);
+            if (!initConst) initConst = Constant::getNullValue(llvmTy);
+
+            GlobalVariable* gv = new GlobalVariable(
+                *module,
+                llvmTy,
+                true,
+                GlobalValue::ExternalLinkage,
+                initConst,
+                name
+            );
+            auto cit = sourceAttrs.constAttrs.find(name);
+            if (cit != sourceAttrs.constAttrs.end()) {
+                if (!cit->second.section.empty()) {
+                    gv->setSection(cit->second.section);
+                }
+                if (cit->second.exported) {
+                    gv->setLinkage(GlobalValue::ExternalLinkage);
+                }
+            }
+            return VisitResult(gv, typeHelper.getValueTypeFromType(llvmTy));
+        }
+
+        VisitResult right = visit(node->data.assign.right);
+        if (!right.value) return VisitResult();
+
+        AllocaInst* alloc = scopeManager.findVariable(name);
+        if (!alloc) {
+            BasicBlock* entryBB = &curFunc->getEntryBlock();
+            IRBuilder<> tempBuilder(entryBB, entryBB->begin());
+            alloc = tempBuilder.CreateAlloca(right.value->getType(), nullptr, name);
+            scopeManager.defineVariable(name, alloc);
+        }
+
+        Type* targetTy = alloc->getAllocatedType();
+        Value* val = right.value;
+        if (val->getType() != targetTy) {
+            val = typeHelper.castValue(builder, right.value, right.type, typeHelper.getValueTypeFromType(targetTy));
+        }
+        builder.CreateStore(val, alloc);
+        return VisitResult(val, typeHelper.getValueTypeFromType(targetTy));
+    }
+
     VisitResult visitGlobal(ASTNode* node) {
         if (!node) return VisitResult();
         
@@ -2806,3 +3128,11 @@ void llvm_emit_from_ast(ASTNode* ast_root, FILE* llvm_fp) {
         fprintf(llvm_fp, "%s", llvm_ir.c_str());
     }
 }
+
+extern "C" void llvm_set_target_triple(const char* triple) {
+    if (triple && triple[0] != '\0') {
+        g_vix_target_triple = triple;
+    } else {
+        g_vix_target_triple.clear();
+    }
+}//main.c接口

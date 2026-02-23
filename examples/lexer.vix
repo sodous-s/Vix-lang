@@ -1,6 +1,6 @@
 fn lexer(s:string) -> i32 {
     for (i in 0 .. s.length) {
-        c = s[i]
+        let c = s[i]
         if(c >= '0' and c <= '9') {
             print("NUMBER:", c)
         }
