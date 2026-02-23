@@ -1,25 +1,69 @@
 import "std/gui/gui.vix"
 
-fn main() -> i32
-{
-    // 显示信息框
-    show_info_box("欢迎使用Vix Windows GUI!", "Vix GUI演示")
+fn main() -> i32 {
+    // 1. 创建窗口
+    let window = window_create("Vix GUI Example", 800, 600)
     
-    // 创建主窗口
-    hwnd = create_main_window("我的第一个Windows GUI应用", 400, 300)
+    // 2. 检查窗口创建是否成功
+    if (window.sdl_window == nil) {
+        return 1
+    }
     
-    // 添加标签
-    label_hwnd = create_label(hwnd, "欢迎使用Vix Windows GUI!", 50, 50, 200, 30)
+    // 3. 加载字体
+    let font = font_load("arial.ttf", 24)
     
-    // 添加按钮
-    button_hwnd = create_button(hwnd, "点击我", 50, 100, 100, 30, 1001)
+    // 4. 初始化变量
+    let x = 100
+    let y = 100
     
-    // 显示窗口
-    show_window(hwnd)
+    // 5. 主循环
+    while (window_is_running(&window)) {
+        // 处理事件
+        let event_type: u32 = 0
+        while (window_poll_event(&event_type)) {
+            if (event_is_quit(event_type)) {
+                window_set_running(&window, false)
+            }
+            elif (event_is_key_down(event_type)) {
+                // 处理键盘事件
+                // 需要根据实际事件结构获取按键
+            }
+            elif (event_is_mouse_down(event_type)) {
+                // 处理鼠标事件
+            }
+        }
+        
+        // 更新逻辑
+        x = x + 1
+        if (x > 700) {
+            x = 100
+        }
+        
+        // 绘制
+        window_clear(&window)
+        
+        // 绘制背景
+        draw_rect_filled(&window, &rect_create(0, 0, 800, 600), COLOR_BLUE)
+        
+        // 绘制移动的方块
+        draw_rect_filled(&window, &rect_create(x, y, 100, 100), COLOR_RED)
+        draw_rect_outline(&window, &rect_create(x, y, 100, 100), COLOR_WHITE)
+        
+        // 绘制文本
+        if (font.sdl_font != nil) {
+            draw_text(&window, &font, "Hello Vix GUI!", 300, 300, COLOR_WHITE)
+        }
+        
+        // 显示结果
+        window_present(&window)
+        
+        // 控制帧率
+        window_delay(16)
+    }
     
-    // 启动消息循环
-    message_loop()
+    // 6. 清理资源
+    font_destroy(&font)
+    window_destroy(&window)
     
     return 0
 }
-
