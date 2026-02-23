@@ -584,5 +584,4 @@ fn main() -> i32 {
     return 0
 }
 
-// 编译命令：vixc your_program.vix -o your_program -lSDL2 -lSDL2_ttf -lSDL2_image
 */
