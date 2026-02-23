@@ -1,0 +1,14 @@
+import "std/io.vix"
+fn main() ->i32
+{
+    file = fopen("test.txt", "w")
+    if(file == nil)
+    {
+        puts("Failed to open file")
+        return 1
+    }
+    data = "Hello, Vix!"
+    fwrite(data, 1, data.length, file)
+    fclose(file)
+    return 0
+}

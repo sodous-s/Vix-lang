@@ -1,0 +1,11 @@
+extern "C"
+{
+    fn system(cmd: ptr) -> i32
+    fn exit(status: i32) -> void
+}
+pub system(cmd: ptr) -> i32 {
+    return system(cmd)
+}
+pub exit(status: i32) -> void {
+    exit(status)
+}

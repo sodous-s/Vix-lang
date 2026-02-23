@@ -150,6 +150,7 @@ ASTNode* create_assign_node_with_location(ASTNode* left, ASTNode* right, Locatio
     node->location = location;
     node->data.assign.left = left;
     node->data.assign.right = right;
+    node->data.assign.is_declaration = 0;
     return node;
 }
 
@@ -159,6 +160,7 @@ ASTNode* create_const_node_with_location(ASTNode* left, ASTNode* right, Location
     node->location = location;
     node->data.assign.left = left;
     node->data.assign.right = right;
+    node->data.assign.is_declaration = 0;
     return node;
 }
 
@@ -194,6 +196,7 @@ ASTNode* create_assign_node_with_yyltype(ASTNode* left, ASTNode* right, void* yy
     node->type = AST_ASSIGN;
     node->data.assign.left = left;
     node->data.assign.right = right;
+    node->data.assign.is_declaration = 0;
     node->mutability = MUTABILITY_IMMUTABLE;//默认为不可变
     
     return node;
@@ -206,6 +209,7 @@ ASTNode* create_assign_node_with_mutability(ASTNode* left, ASTNode* right, Mutab
     node->type = AST_ASSIGN;
     node->data.assign.left = left;
     node->data.assign.right = right;
+    node->data.assign.is_declaration = 0;
     node->mutability = mutability;
     
     return node;

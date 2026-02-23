@@ -1,5 +1,5 @@
-a = 10
-b = 20
+let a = 10
+let b = 20
 if (a == 10 or  b == 20) {
     print("a is 10 or b is 20")
 }

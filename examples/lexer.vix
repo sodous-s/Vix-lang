@@ -23,7 +23,7 @@ fn lexer(s:string) -> i32 {
     return 0
 }
 fn main() -> i32 {
-    s = "1 + 1 + 2 = 4"
+    let s = "1 + 1 + 2 = 4"
     lexer(s)
     return 0
 }

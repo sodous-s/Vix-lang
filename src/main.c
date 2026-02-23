@@ -15,9 +15,9 @@ vix 语言 0.0.1版本完工
 #include "../include/qbe-ir/opt.h"
 
 typedef enum {
-    BACKEND_DEFAULT_CPP,  // 默认后端（C++）
-    BACKEND_QBE,          // QBE IR 后端
-    BACKEND_LLVM          // LLVM IR 后端
+    BACKEND_DEFAULT_LLVM,//提拔为默认后端
+    BACKEND_QBE,
+    BACKEND_CPP//cpp我不要你了
 } BackendType;
 
 extern FILE* yyin;
@@ -40,8 +40,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "       %s <input.vix> -cpp (output C++ code only)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> -ll (output LLVM IR only)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> -llvm (output LLVM IR only)\n", argv[0]);
+        fprintf(stderr, "       %s <input.vix> --debug (enable debug logs)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> (output all: bytecode, AST, QBE IR, C++ code, LLVM IR)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> -o output_file --backend=qbe|llvm|gcc\n", argv[0]);
+        fprintf(stderr, "       %s <input.vix> -o output_file --backend=qbe|llvm|cpp\n", argv[0]);
         return 1;
     }
     
@@ -67,8 +68,9 @@ int main(int argc, char **argv) {
     int output_qbe_only = 0;
     int output_cpp_only = 0;
     int output_llvm_only = 0;
+    int enable_debug_log = 0;
     int do_opt = 0;
-    BackendType backend_type = BACKEND_DEFAULT_CPP;
+    BackendType backend_type = BACKEND_DEFAULT_LLVM;
     
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] != '-' && strcmp(argv[i], "init") != 0) {
@@ -82,9 +84,9 @@ int main(int argc, char **argv) {
             if (strcmp(backend_str, "qbe") == 0) {
                 backend_type = BACKEND_QBE;
             } else if (strcmp(backend_str, "llvm") == 0) {
-                backend_type = BACKEND_LLVM;
+                backend_type = BACKEND_DEFAULT_LLVM;
             } else if (strcmp(backend_str, "cpp") == 0) {
-                backend_type = BACKEND_DEFAULT_CPP;
+                backend_type = BACKEND_CPP;
             } else {
                 fprintf(stderr, "Er: Unknown backend '%s' backends: qbe, llvm, cpp\n", backend_str);
                 return 1;
@@ -148,6 +150,8 @@ int main(int argc, char **argv) {
             output_ast_only = 1;
         } else if (strcmp(argv[i], "-cpp") == 0) {
             output_cpp_only = 1;
+        } else if (strcmp(argv[i], "--debug") == 0) {
+            enable_debug_log = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             fprintf(stderr, "usage: %s <input.vix> [-o output_file]\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> [-o output_file] [-kt]\n", argv[0]);
@@ -161,21 +165,36 @@ int main(int argc, char **argv) {
             fprintf(stderr, "       %s <input.vix> -cpp (output C++ code only)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -ll (output LLVM IR only)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -llvm (output LLVM IR only)\n", argv[0]);
+            fprintf(stderr, "       %s <input.vix> --debug (enable debug logs)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> (output all intermediate representations)\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> -o output_file --backend=qbe|llvm|gcc\n", argv[0]);
+            fprintf(stderr, "       %s <input.vix> -o output_file --backend=qbe|llvm|cpp\n", argv[0]);
             return 0;
         } else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0) {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
-            fprintf(stderr, "Usage: %s <input.vix> [-o output_file] [-kt] [-q [qbe_file]] [-ir vic_file] [-llvm [llvm_file]] [-ll [llvm_file]] [-b [output_file.vbc]] [-ast] [-cpp] [--backend=qbe|llvm|cpp]\n", argv[0]);
+            fprintf(stderr, "Usage: %s <input.vix> [-o output_file] [-kt] [-q [qbe_file]] [-ir vic_file] [-llvm [llvm_file]] [-ll [llvm_file]] [-b [output_file.vbc]] [-ast] [-cpp] [--debug] [--backend=qbe|llvm|cpp]\n", argv[0]);
             return 1;
         } else {
             is_vic_file = strlen(argv[i]) > 4 && strcmp(argv[i] + strlen(argv[i]) - 4, ".vic") == 0;
         }
     }
+    setenv("VIX_DEBUG", enable_debug_log ? "1" : "0", 1);//通过环境变量控制调试输出
     if (!input_filename) {
         input_filename = argv[1];
     }
-    if (backend_type == BACKEND_LLVM && !output_filename && save_cpp_file == 0) {
+    int has_explicit_output_mode =
+        output_bytecode ||
+        output_ast_only ||
+        output_qbe_only ||
+        output_cpp_only ||
+        output_llvm_only ||
+        generate_qbe_ir ||
+        generate_vic_ir ||
+        generate_llvm_ir;
+
+    if (backend_type == BACKEND_DEFAULT_LLVM &&
+        !has_explicit_output_mode &&
+        !output_filename &&
+        save_cpp_file == 0) {
         char* dot = strrchr(input_filename, '.');
         if (dot) {
             size_t len = dot - input_filename;
@@ -223,7 +242,7 @@ int main(int argc, char **argv) {
                 }
             }
         }
-    } else if (backend_type == BACKEND_LLVM && save_cpp_file) {
+    } else if (backend_type == BACKEND_DEFAULT_LLVM && save_cpp_file) {
         generate_llvm_ir = 1;
         if (!llvm_ir_filename) {
             char* dot = strrchr(output_filename, '.');
@@ -392,7 +411,7 @@ int main(int argc, char **argv) {
             
             llvm_emit_from_ast(root, llvm_file);
             fclose(llvm_file);
-            if (backend_type == BACKEND_LLVM && output_filename && save_cpp_file) {
+            if (backend_type == BACKEND_DEFAULT_LLVM && output_filename && save_cpp_file) {
                 
                 size_t compile_cmd_size = strlen("clang -O2 ") + strlen(llvm_ir_filename) + strlen(" -o ") + strlen(output_filename) + 1;
                 char *compile_cmd = malloc(compile_cmd_size);
@@ -586,26 +605,6 @@ int main(int argc, char **argv) {
             printf("=========================LLVM IR===================\n");
             llvm_emit_from_ast(root, stdout);
             printf("===================================================\n");
-            free_bytecode_gen(gen);
-            if (root) free_ast(root);
-            fclose(input_file);
-            return 0;
-        }
-        
-        if (!save_cpp_file && !keep_cpp_file && !generate_qbe_ir && !generate_vic_ir && !generate_llvm_ir && !output_bytecode) {
-            printf("=========================BYTECODE==================\n");
-            print_bytecode_to_file(gen->bytecode, stdout);
-            printf("\n===========================AST=======================\n");
-            print_ast(root, 0);
-            printf("\n=========================QBE IR====================\n");
-            ir_gen(root, stdout);
-            printf("\n=========================C++ CODE==================\n");
-            TypeInferenceContext* type_ctx = create_type_inference_context();
-            analyze_ast(type_ctx, root);
-            compile_ast_to_cpp_with_types(gen, type_ctx, root, stdout);
-            free_type_inference_context(type_ctx);
-            printf("\n=========================LLVM IR===================\n");
-            llvm_emit_from_ast(root, stdout);
             free_bytecode_gen(gen);
             if (root) free_ast(root);
             fclose(input_file);

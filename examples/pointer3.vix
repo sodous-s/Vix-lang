@@ -1,0 +1,29 @@
+fn set_by_ptr(mut p: & i32, v: i32) {
+	@p = v
+}
+
+fn swap(mut a: & i32, mut b: & i32) {
+	tmp = @a
+	@a = @b
+	@b = tmp
+}
+
+fn main() -> i32 {
+	x = 10
+	mut ptr = &x
+	print(@ptr)
+	@ptr = 20
+	print(x)
+	arr = [1, 2, 3, 4, 5]
+	p = &arr[0]
+	second = @(p + 1)
+	print(second)
+	set_by_ptr(&x, 99)
+	print(x)
+	a = 7
+	b = 8
+	swap(&a, &b)
+	print(a)
+	print(b)
+	return 0
+}

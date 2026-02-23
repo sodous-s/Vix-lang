@@ -24,7 +24,7 @@ ASTNode* root;
 
 %token <str> IDENTIFIER STRING CHAR_LITERAL
 %token STRUCT COLON
-%token CONST MUT GLOBAL
+%token CONST LET MUT GLOBAL
 %token IMPORT PUB
 %token <num_int> NUMBER_INT
 %token <num_float> NUMBER_FLOAT
@@ -89,6 +89,24 @@ statement_list
 statement
     : print_statement SEMICOLON     { $$ = $1; }
     | assignment_statement SEMICOLON { $$ = $1; }
+    | LET identifier ASSIGN expression SEMICOLON {
+        $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET MUT identifier ASSIGN expression SEMICOLON {
+        $$ = create_assign_node_with_yyltype($3, $5, (YYLTYPE*) &@$);
+        $3->mutability = MUTABILITY_MUTABLE;
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET identifier COLON type ASSIGN expression SEMICOLON {
+        $$ = create_assign_node_with_yyltype($2, $6, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET MUT identifier COLON type ASSIGN expression SEMICOLON {
+        $$ = create_assign_node_with_yyltype($3, $7, (YYLTYPE*) &@$);
+        $3->mutability = MUTABILITY_MUTABLE;
+        $$->data.assign.is_declaration = 1;
+    }
     | lvalue ASSIGN expression SEMICOLON { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON expression SEMICOLON { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON type ASSIGN expression SEMICOLON { 
@@ -114,6 +132,24 @@ statement
     | for_statement               { $$ = $1; }
     | print_statement               { $$ = $1; }
     | assignment_statement          { $$ = $1; }
+    | LET identifier ASSIGN expression {
+        $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET MUT identifier ASSIGN expression {
+        $$ = create_assign_node_with_yyltype($3, $5, (YYLTYPE*) &@$);
+        $3->mutability = MUTABILITY_MUTABLE;
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET identifier COLON type ASSIGN expression {
+        $$ = create_assign_node_with_yyltype($2, $6, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET MUT identifier COLON type ASSIGN expression {
+        $$ = create_assign_node_with_yyltype($3, $7, (YYLTYPE*) &@$);
+        $3->mutability = MUTABILITY_MUTABLE;
+        $$->data.assign.is_declaration = 1;
+    }
     | lvalue ASSIGN expression { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON expression { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON type ASSIGN expression { 

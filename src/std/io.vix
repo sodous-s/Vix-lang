@@ -1,8 +1,29 @@
 extern "C"
 {
     fn printf(format: ptr, ...) -> i32
+    fn fprintf(file: ptr, format: ptr, ...) -> i32
+    fn fopen(filename: ptr, mode: ptr) -> ptr
+    fn fclose(file: ptr) -> i32
+    fn fread(ptr: ptr, size: usize, count: usize, file: ptr) -> usize
+    fn fwrite(ptr: ptr, size: usize, count: usize, file: ptr) -> usize
 }
 pub fn puts(s: ptr) -> i32
 {
     return printf("%s\n", s)
+}
+pub fn fopen(filename: ptr, mode: ptr) -> ptr
+{
+    return fopen(filename, mode)
+}
+pub fn fclose(file: ptr) -> i32
+{
+    return fclose(file)
+}
+pub fn fread(ptr: ptr, size: usize, count: usize, file: ptr)    -> usize
+{
+    return fread(ptr, size, count, file)
+}
+pub fn fwrite(ptr: ptr, size: usize, count: usize, file: ptr) -> usize
+{
+    return fwrite(ptr, size, count, file)
 }
