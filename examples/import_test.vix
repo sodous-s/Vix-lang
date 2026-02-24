@@ -6,7 +6,7 @@ extern "C"
 }
 fn main(argc:i32,argv:ptr) ->i32
 {
-    arr = [5 , 4 , 6 , 7 , 2 , 1]
+    let arr = [5 , 4 , 6 , 7 , 2 , 1]
     sort(arr , arr.length)
     for (i in 0 .. arr.length)
     {

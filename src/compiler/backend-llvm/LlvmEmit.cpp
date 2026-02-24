@@ -232,6 +232,12 @@ public:
             }
         }
         
+        if (node->type == AST_TYPE_FIXED_SIZE_LIST) {
+            if (node->data.fixed_size_list_type.element_type) {
+                return getTypeFromTypeNode(node->data.fixed_size_list_type.element_type);
+            }
+        }
+        
         return Type::getInt32Ty(context);
     }
     
@@ -268,6 +274,35 @@ public:
             if (it->second[i].first == fieldName) return i;
         }
         return -1;
+    }
+
+    StructType* inferStructTypeByFieldName(const std::string& fieldName, std::string* outStructName = nullptr) {
+        StructType* matchedType = nullptr;
+        std::string matchedName;
+
+        for (const auto& it : structFields) {
+            const std::string& structName = it.first;
+            const auto& fields = it.second;
+            for (const auto& field : fields) {
+                if (field.first == fieldName) {
+                    auto sit = structTypes.find(structName);
+                    if (sit == structTypes.end() || !sit->second) {
+                        return nullptr;
+                    }
+                    if (matchedType && matchedType != sit->second) {
+                        return nullptr;
+                    }
+                    matchedType = sit->second;
+                    matchedName = structName;
+                    break;
+                }
+            }
+        }
+
+        if (matchedType && outStructName) {
+            *outStructName = matchedName;
+        }
+        return matchedType;
     }
     
     Type* getLLVMType(ValueType type) {
@@ -341,7 +376,7 @@ public:
             std::string typeName(node->data.identifier.name);
             if (typeName == "ptr") return PointerType::getUnqual(Type::getInt8Ty(context));
             if (typeName == "str") return PointerType::getUnqual(Type::getInt8Ty(context));
-            if (typeName == "i8") return Type::getInt8Ty(context);
+            if (typeName == "i8" || typeName == "u8" || typeName == "char") return Type::getInt8Ty(context);
             if (typeName == "i32") return Type::getInt32Ty(context);
             if (typeName == "i64") return Type::getInt64Ty(context);
             if (typeName == "f32") return Type::getFloatTy(context);
@@ -377,7 +412,7 @@ public:
                 std::string typeName(node->data.identifier.name);
                 if (typeName == "ptr") return ValueType::POINTER;
                 if (typeName == "str") return ValueType::STRING;
-                if (typeName == "i8") return ValueType::INT8;
+                if (typeName == "i8" || typeName == "u8" || typeName == "char") return ValueType::INT8;
                 if (typeName == "i32") return ValueType::INT32;
                 if (typeName == "i64") return ValueType::INT64;
                 if (typeName == "f32") return ValueType::FLOAT32;
@@ -418,6 +453,15 @@ public:
     
     Value* castValue(IRBuilder<>& builder, Value* val, ValueType from, ValueType to) {
         if (from == to) return val;
+
+        auto isIntegerLike = [](ValueType t) {
+            return t == ValueType::BOOL || t == ValueType::INT8 || t == ValueType::INT32 || t == ValueType::INT64;
+        };
+
+        if (isIntegerLike(from) && isIntegerLike(to)) {
+            bool fromSigned = (from != ValueType::BOOL);
+            return builder.CreateIntCast(val, getLLVMType(to), fromSigned, "icast");
+        }
         
         if (from == ValueType::BOOL && to == ValueType::INT32)
             return builder.CreateZExt(val, Type::getInt32Ty(context), "zext");
@@ -499,6 +543,9 @@ private:
     bool isGlobalScope;
     bool mainFunctionCreated;
     SourceAttrInfo sourceAttrs;
+    std::map<std::string, std::vector<int>> functionArrayParamPositions;
+    std::vector<BasicBlock*> loopBreakTargets;
+    std::vector<BasicBlock*> loopContinueTargets;
     
     bool ensureValidInsertPoint() {
         BasicBlock* currentBB = builder.GetInsertBlock();
@@ -645,6 +692,69 @@ private:
         VIX_DEBUG_LOG << "[DEBUG] Unknown pointer '" << varName
                      << "': defaulting to i8\n";
         return Type::getInt8Ty(context);
+    }
+
+    bool isArrayParamPosition(const std::string& funcName, int userParamIndex) {
+        auto it = functionArrayParamPositions.find(funcName);
+        if (it == functionArrayParamPositions.end()) return false;
+        for (int pos : it->second) {
+            if (pos == userParamIndex) return true;
+        }
+        return false;
+    }
+
+    Value* getRuntimeArrayLengthValue(const std::string& varName) {
+        std::string lenVarName = varName + "__len";
+        AllocaInst* lenAlloc = scopeManager.findVariable(lenVarName);
+        if (!lenAlloc) lenAlloc = findVariableInMain(lenVarName);
+        if (!lenAlloc) return nullptr;
+
+        Type* lenType = getActualType(lenAlloc);
+        if (!lenType || !lenType->isIntegerTy()) return nullptr;
+
+        Value* lenVal = builder.CreateLoad(lenType, lenAlloc, lenVarName + "_val");
+        if (!lenVal->getType()->isIntegerTy(32)) {
+            lenVal = builder.CreateIntCast(lenVal, Type::getInt32Ty(context), false, "arr_len_cast");
+        }
+        return lenVal;
+    }
+
+    Value* inferArrayLengthFromArgument(ASTNode* argNode) {
+        if (argNode && argNode->type == AST_IDENTIFIER && argNode->data.identifier.name) {
+            std::string varName(argNode->data.identifier.name);
+
+            if (Value* runtimeLen = getRuntimeArrayLengthValue(varName)) {
+                return runtimeLen;
+            }
+
+            AllocaInst* alloc = scopeManager.findVariable(varName);
+            if (!alloc) alloc = findVariableInMain(varName);
+            if (alloc) {
+                Type* allocatedType = getActualType(alloc);
+                if (allocatedType && allocatedType->isArrayTy()) {
+                    uint64_t numElements = cast<ArrayType>(allocatedType)->getNumElements();
+                    return ConstantInt::get(Type::getInt32Ty(context), numElements);
+                }
+            }
+
+            if (auto* arrayInfo = typeHelper.getArrayTypeInfo(varName)) {
+                if (arrayInfo->second >= 0) {
+                    return ConstantInt::get(Type::getInt32Ty(context), arrayInfo->second);
+                }
+            }
+
+            int knownSize = typeHelper.getVariableArraySize(varName);
+            if (knownSize >= 0) {
+                return ConstantInt::get(Type::getInt32Ty(context), knownSize);
+            }
+        }
+
+        if (argNode && argNode->type == AST_EXPRESSION_LIST) {
+            int count = argNode->data.expression_list.expression_count;
+            return ConstantInt::get(Type::getInt32Ty(context), count);
+        }
+
+        return ConstantInt::get(Type::getInt32Ty(context), 0);
     }
 
     Constant* evaluateConstExpr(ASTNode* node, ValueType* outType = nullptr) {
@@ -897,6 +1007,8 @@ public:
             case AST_IF:           return visitIf(node);
             case AST_WHILE:        return visitWhile(node);
             case AST_FOR:          return visitFor(node);
+            case AST_BREAK:        return visitBreak(node);
+            case AST_CONTINUE:     return visitContinue(node);
             case AST_FUNCTION:     return visitFunction(node);
             case AST_CALL:         return visitCall(node);
             case AST_RETURN:       return visitReturn(node);
@@ -1039,6 +1151,7 @@ public:
         // 检查操作数类型并确保它们兼容
         // 特别处理 i8 类型的比较操作
         if ((leftRes.type == ValueType::INT8 || rightRes.type == ValueType::INT8) &&
+            leftRes.value->getType()->isIntegerTy() && rightRes.value->getType()->isIntegerTy() &&
             (node->data.binop.op == OP_EQ || node->data.binop.op == OP_NE ||
              node->data.binop.op == OP_LT || node->data.binop.op == OP_LE ||
              node->data.binop.op == OP_GT || node->data.binop.op == OP_GE)) {
@@ -1123,6 +1236,58 @@ public:
                 return VisitResult(gep, ValueType::POINTER);
             }
         }
+
+        bool isCompareOp = (node->data.binop.op == OP_EQ || node->data.binop.op == OP_NE ||
+                            node->data.binop.op == OP_LT || node->data.binop.op == OP_LE ||
+                            node->data.binop.op == OP_GT || node->data.binop.op == OP_GE);
+        if (isCompareOp && (leftRes.value->getType()->isPointerTy() || rightRes.value->getType()->isPointerTy())) {
+            Value* leftVal = leftRes.value;
+            Value* rightVal = rightRes.value;
+            Type* leftTy = leftVal->getType();
+            Type* rightTy = rightVal->getType();
+
+            if (leftTy->isPointerTy() && rightTy->isPointerTy()) {
+                if (leftTy != rightTy) {
+                    rightVal = builder.CreateBitCast(rightVal, leftTy, "cmp_ptr_cast");
+                }
+            } else if (leftTy->isPointerTy() && rightTy->isIntegerTy()) {
+                if (auto* ci = dyn_cast<ConstantInt>(rightVal); ci && ci->isZero()) {
+                    rightVal = ConstantPointerNull::get(cast<PointerType>(leftTy));
+                } else {
+                    if (!rightTy->isIntegerTy(64)) {
+                        rightVal = builder.CreateIntCast(rightVal, Type::getInt64Ty(context), false, "cmp_int_cast64");
+                    }
+                    rightVal = builder.CreateIntToPtr(rightVal, cast<PointerType>(leftTy), "cmp_int_to_ptr");
+                }
+            } else if (rightTy->isPointerTy() && leftTy->isIntegerTy()) {
+                if (auto* ci = dyn_cast<ConstantInt>(leftVal); ci && ci->isZero()) {
+                    leftVal = ConstantPointerNull::get(cast<PointerType>(rightTy));
+                } else {
+                    if (!leftTy->isIntegerTy(64)) {
+                        leftVal = builder.CreateIntCast(leftVal, Type::getInt64Ty(context), false, "cmp_int_cast64");
+                    }
+                    leftVal = builder.CreateIntToPtr(leftVal, cast<PointerType>(rightTy), "cmp_int_to_ptr");
+                }
+            }
+
+            switch (node->data.binop.op) {
+                case OP_EQ:
+                    return VisitResult(builder.CreateICmpEQ(leftVal, rightVal, "eqtmp"), ValueType::BOOL);
+                case OP_NE:
+                    return VisitResult(builder.CreateICmpNE(leftVal, rightVal, "netmp"), ValueType::BOOL);
+                case OP_LT:
+                    return VisitResult(builder.CreateICmpULT(leftVal, rightVal, "lttmp"), ValueType::BOOL);
+                case OP_LE:
+                    return VisitResult(builder.CreateICmpULE(leftVal, rightVal, "letmp"), ValueType::BOOL);
+                case OP_GT:
+                    return VisitResult(builder.CreateICmpUGT(leftVal, rightVal, "gttmp"), ValueType::BOOL);
+                case OP_GE:
+                    return VisitResult(builder.CreateICmpUGE(leftVal, rightVal, "getmp"), ValueType::BOOL);
+                default:
+                    return VisitResult();
+            }
+        }
+
         auto [promotedLeftType, promotedRightType] = typeHelper.promoteTypes(
             leftRes.type, rightRes.type);
         
@@ -1134,6 +1299,23 @@ public:
         ValueType resultType = (promotedLeftType > promotedRightType) 
                                ? promotedLeftType : promotedRightType;
         bool isFloat = (resultType == ValueType::FLOAT32 || resultType == ValueType::FLOAT64);
+
+        auto toBoolValue = [&](Value* v, ValueType vt, const char* name) -> Value* {
+            if (vt == ValueType::BOOL && v->getType()->isIntegerTy(1)) {
+                return v;
+            }
+            Type* ty = v->getType();
+            if (ty->isIntegerTy()) {
+                return builder.CreateICmpNE(v, ConstantInt::get(ty, 0), name);
+            }
+            if (ty->isFloatingPointTy()) {
+                return builder.CreateFCmpONE(v, ConstantFP::get(ty, 0.0), name);
+            }
+            if (ty->isPointerTy()) {
+                return builder.CreateICmpNE(v, ConstantPointerNull::get(cast<PointerType>(ty)), name);
+            }
+            return ConstantInt::getFalse(context);
+        };
         
         switch (node->data.binop.op) {
             case OP_ADD:
@@ -1171,19 +1353,15 @@ public:
                 else return VisitResult(builder.CreateICmpSGE(leftVal, rightVal, "getmp"), ValueType::BOOL);
             case OP_AND:
                 {
-                    Value* leftBool = leftRes.type == ValueType::BOOL ? leftVal : 
-                                    builder.CreateICmpNE(leftVal, ConstantInt::get(leftVal->getType(), 0), "and_lhs");
-                    Value* rightBool = rightRes.type == ValueType::BOOL ? rightVal : 
-                                     builder.CreateICmpNE(rightVal, ConstantInt::get(rightVal->getType(), 0), "and_rhs");
+                    Value* leftBool = toBoolValue(leftRes.value, leftRes.type, "and_lhs");
+                    Value* rightBool = toBoolValue(rightRes.value, rightRes.type, "and_rhs");
                     Value* result = builder.CreateAnd(leftBool, rightBool, "andtmp");
                     return VisitResult(result, ValueType::BOOL);
                 }
             case OP_OR:
                 {
-                    Value* leftBool = leftRes.type == ValueType::BOOL ? leftVal : 
-                                    builder.CreateICmpNE(leftVal, ConstantInt::get(leftVal->getType(), 0), "or_lhs");
-                    Value* rightBool = rightRes.type == ValueType::BOOL ? rightVal : 
-                                     builder.CreateICmpNE(rightVal, ConstantInt::get(rightVal->getType(), 0), "or_rhs");
+                    Value* leftBool = toBoolValue(leftRes.value, leftRes.type, "or_lhs");
+                    Value* rightBool = toBoolValue(rightRes.value, rightRes.type, "or_rhs");
                     Value* result = builder.CreateOr(leftBool, rightBool, "ortmp");
                     return VisitResult(result, ValueType::BOOL);
                 }
@@ -1927,8 +2105,36 @@ public:
         if (!node) return VisitResult();
         for (int i = 0; i < node->data.program.statement_count; i++) {
             visit(node->data.program.statements[i]);
+            BasicBlock* currentBB = builder.GetInsertBlock();
+            if (currentBB && currentBB->getTerminator()) {
+                break;
+            }
         }
         
+        return VisitResult();
+    }
+
+    VisitResult visitBreak(ASTNode* node) {
+        (void)node;
+        if (loopBreakTargets.empty()) {
+            llvm::errs() << "Error: 'break' used outside of loop\n";
+            return VisitResult();
+        }
+
+        BasicBlock* target = loopBreakTargets.back();
+        builder.CreateBr(target);
+        return VisitResult();
+    }
+
+    VisitResult visitContinue(ASTNode* node) {
+        (void)node;
+        if (loopContinueTargets.empty()) {
+            llvm::errs() << "Error: 'continue' used outside of loop\n";
+            return VisitResult();
+        }
+
+        BasicBlock* target = loopContinueTargets.back();
+        builder.CreateBr(target);
         return VisitResult();
     }
     
@@ -1999,9 +2205,13 @@ public:
         func->insert(func->end(), afterBB);
         builder.CreateCondBr(cond, loopBB, afterBB);
         builder.SetInsertPoint(loopBB);
+        loopBreakTargets.push_back(afterBB);
+        loopContinueTargets.push_back(condBB);
         scopeManager.enterScope();
         visit(node->data.while_stmt.body);
         scopeManager.exitScope();
+        loopContinueTargets.pop_back();
+        loopBreakTargets.pop_back();
         loopBB = builder.GetInsertBlock();
         if (!loopBB->getTerminator()) {
             builder.CreateBr(condBB);
@@ -2068,9 +2278,13 @@ public:
         func->insert(func->end(), afterBB);
         builder.CreateCondBr(cond, loopBB, afterBB);
         builder.SetInsertPoint(loopBB);
+        loopBreakTargets.push_back(afterBB);
+        loopContinueTargets.push_back(incBB);
         scopeManager.enterScope();
         visit(body_node);
         scopeManager.exitScope();
+        loopContinueTargets.pop_back();
+        loopBreakTargets.pop_back();
         if (!builder.GetInsertBlock()->getTerminator()) {
             builder.CreateBr(incBB);
         }
@@ -2095,10 +2309,12 @@ public:
         std::vector<Type*> paramTypes;
         std::vector<std::string> paramNames;
         std::vector<ValueType> paramValueTypes;
+        functionArrayParamPositions[funcName].clear();
         
         if (node->data.function.params) {
             if (node->data.function.params->type == AST_EXPRESSION_LIST) {
                 int paramCount = node->data.function.params->data.expression_list.expression_count;
+                int userParamIndex = 0;
                 for (int i = 0; i < paramCount; i++) {
                     ASTNode* param = node->data.function.params->data.expression_list.expressions[i];
                     
@@ -2109,6 +2325,9 @@ public:
                             std::string paramName(left->data.identifier.name);
                             paramNames.push_back(paramName);
                             ValueType paramType = ValueType::INT32;
+                            bool isArrayParam = false;
+                            Type* arrayElementType = Type::getInt32Ty(context);
+                            int arrayElementCount = -1;
                             if (right && right->type == AST_IDENTIFIER) {
                                 std::string typeName(right->data.identifier.name);
                                 if (typeName == "ptr") {
@@ -2154,6 +2373,9 @@ public:
                                     paramType = ValueType::POINTER;
                                     paramTypes.push_back(PointerType::getUnqual(elemType));
                                     typeHelper.registerArrayType(paramName, elemType, elemCount > 0 ? elemCount : -1);
+                                    isArrayParam = true;
+                                    arrayElementType = elemType;
+                                    arrayElementCount = (elemCount > 0 ? elemCount : -1);
                                 } else {
                                     Type* llvmParamType = typeHelper.getTypeFromTypeNode(right);
                                     paramType = typeHelper.getValueTypeFromType(llvmParamType);
@@ -2166,12 +2388,24 @@ public:
                             if (paramType == ValueType::STRING) {
                                 typeHelper.registerStringVariable(paramName);
                             }
+
+                            if (isArrayParam) {
+                                functionArrayParamPositions[funcName].push_back(userParamIndex);
+                                paramNames.push_back(paramName + "__len");
+                                paramTypes.push_back(Type::getInt32Ty(context));
+                                paramValueTypes.push_back(ValueType::INT32);
+                                typeHelper.registerArrayType(paramName, arrayElementType, arrayElementCount);
+                                typeHelper.registerVariableArraySize(paramName, arrayElementCount);
+                            }
+
+                            userParamIndex++;
                         }
                     } else if (param->type == AST_IDENTIFIER) {
                         std::string paramName(param->data.identifier.name);
                         paramNames.push_back(paramName);
                         paramValueTypes.push_back(ValueType::INT32);
                         paramTypes.push_back(Type::getInt32Ty(context));
+                        userParamIndex++;
                     }
                 }
             }
@@ -2286,18 +2520,25 @@ public:
         int expectedParamCount = callee->getFunctionType()->getNumParams();
         int actualParamCount = node->data.call.args ? 
             node->data.call.args->data.expression_list.expression_count : 0;
+        int hiddenArrayLenParamCount = 0;
+        auto arrayMetaIt = functionArrayParamPositions.find(calleeName);
+        if (arrayMetaIt != functionArrayParamPositions.end()) {
+            hiddenArrayLenParamCount = (int)arrayMetaIt->second.size();
+        }
+        int expectedUserParamCount = expectedParamCount - hiddenArrayLenParamCount;
         bool isVarArg = callee->getFunctionType()->isVarArg();
         bool isKnownVarArgFunc = (calleeName == "printf" || calleeName == "sprintf" ||
                                   calleeName == "snprintf" || calleeName == "scanf");
         
-        if (!isVarArg && !isKnownVarArgFunc && actualParamCount != expectedParamCount) {
+        if (!isVarArg && !isKnownVarArgFunc && actualParamCount != expectedUserParamCount) {
             llvm::errs() << "Error: Function '" << calleeName 
-                        << "' expects " << expectedParamCount 
+                        << "' expects " << expectedUserParamCount 
                         << " arguments but got " << actualParamCount << "\n";
             return VisitResult();
         }
         
         std::vector<Value*> args;
+        int llvmParamIndex = 0;
         if (node->data.call.args) {
             for (int i = 0; i < actualParamCount; i++) {
                 ASTNode* argNode = node->data.call.args->data.expression_list.expressions[i];
@@ -2307,10 +2548,10 @@ public:
                                 << " for function '" << calleeName << "'\n";
                     return VisitResult();
                 }
-                if (i < expectedParamCount || isVarArg || isKnownVarArgFunc) {
+                if (llvmParamIndex < expectedParamCount || isVarArg || isKnownVarArgFunc) {
                     Type* expectedType = nullptr;
-                    if (i < expectedParamCount) {
-                        expectedType = callee->getFunctionType()->getParamType(i);
+                    if (llvmParamIndex < expectedParamCount) {
+                        expectedType = callee->getFunctionType()->getParamType(llvmParamIndex);
                     } else {
                         if (isKnownVarArgFunc) {
                             if (argRes.value->getType()->isIntegerTy() && 
@@ -2344,6 +2585,24 @@ public:
                         arg = builder.CreateBitCast(arg, expectedType, "arg_ptrcast");
                     }//对于已知的可变参数函数，like printf 就允许传入与参数类型不完全匹配但可转换的值 like: i8* 传递给 %s
                     args.push_back(arg);
+                    llvmParamIndex++;
+
+                    if (!isVarArg && !isKnownVarArgFunc && isArrayParamPosition(calleeName, i)) {
+                        Value* lenVal = inferArrayLengthFromArgument(argNode);
+                        Type* lenExpectedType = Type::getInt32Ty(context);
+                        if (llvmParamIndex < expectedParamCount) {
+                            lenExpectedType = callee->getFunctionType()->getParamType(llvmParamIndex);
+                        }
+
+                        if (!lenVal->getType()->isIntegerTy()) {
+                            lenVal = typeHelper.castValue(builder, lenVal, ValueType::INT32, ValueType::INT32);
+                        }
+                        if (lenVal->getType() != lenExpectedType && lenExpectedType->isIntegerTy()) {
+                            lenVal = builder.CreateIntCast(lenVal, lenExpectedType, false, "arr_len_arg_cast");
+                        }
+                        args.push_back(lenVal);
+                        llvmParamIndex++;
+                    }
                 }
             }
         }
@@ -2462,6 +2721,11 @@ public:
         if (object->type == AST_IDENTIFIER) {
             std::string varName(object->data.identifier.name);
             VIX_DEBUG_LOG << "[DEBUG] to geet length of variable: " << varName << "\n";
+
+            if (Value* runtimeLen = getRuntimeArrayLengthValue(varName)) {
+                VIX_DEBUG_LOG << "[DEBUG] Array length (runtime fat ptr): dynamic\n";
+                return VisitResult(runtimeLen, ValueType::INT32);
+            }
             
             AllocaInst* alloc = scopeManager.findVariable(varName);
             VIX_DEBUG_LOG << "[DEBUG] found in scopeMar: " << (alloc ? "yes" : "no") << "\n";
@@ -2583,6 +2847,20 @@ public:
                 }
             }
         }
+
+        if (!structType && objectRes.value->getType()->isPointerTy()) {
+            std::string inferredStructName;
+            StructType* inferredStructType = typeHelper.inferStructTypeByFieldName(fieldName, &inferredStructName);
+            if (inferredStructType) {
+                structType = inferredStructType;
+                Type* expectedPtrType = PointerType::getUnqual(structType);
+                if (objectRes.value->getType() == expectedPtrType) {
+                    basePtr = objectRes.value;
+                } else {
+                    basePtr = builder.CreateBitCast(objectRes.value, expectedPtrType, "struct_ptr_cast");
+                }
+            }
+        }
         
         if (!structType || !basePtr) {
             llvm::errs() << "Error: Cannot access member '" << fieldName 
@@ -2601,6 +2879,18 @@ public:
         Value* fieldPtr = builder.CreateStructGEP(structType, basePtr, idx, fieldName);
 
         Type* fieldType = structType->getElementType(idx);
+        if (fieldType->isArrayTy()) {
+            ArrayType* arrayType = cast<ArrayType>(fieldType);
+            Type* elemType = arrayType->getElementType();
+            Value* zero = ConstantInt::get(Type::getInt32Ty(context), 0);
+            Value* elemPtr = builder.CreateInBoundsGEP(fieldType, fieldPtr, {zero, zero}, fieldName + "_ptr");
+
+            if (elemType->isIntegerTy(8)) {
+                return VisitResult(elemPtr, ValueType::STRING, structType);
+            }
+            return VisitResult(elemPtr, ValueType::POINTER, structType);
+        }
+
         if (fieldType->isStructTy()) {
             StructType* nested = cast<StructType>(fieldType);
             return VisitResult(fieldPtr, ValueType::POINTER, nested);
@@ -2843,11 +3133,28 @@ public:
         std::string arrayTypeName = "array_tmp_" + std::to_string((uintptr_t)alloc);
         typeHelper.registerArrayType(arrayTypeName, elemType, count);
 
+        std::vector<Constant*> constElems;
+        constElems.reserve(count);
+        bool allConst = true;
         for (int i = 0; i < count; i++) {
-            Value* idx0 = ConstantInt::get(Type::getInt32Ty(context), 0);
-            Value* idx1 = ConstantInt::get(Type::getInt32Ty(context), i);
-            Value* gep = builder.CreateInBoundsGEP(arrTy, alloc, {idx0, idx1}, "elem_ptr");
-            builder.CreateStore(elems[i], gep);
+            if (auto* c = dyn_cast<Constant>(elems[i])) {
+                constElems.push_back(c);
+            } else {
+                allConst = false;
+                break;
+            }
+        }
+
+        if (allConst) {
+            Constant* constArr = ConstantArray::get(arrTy, constElems);
+            builder.CreateStore(constArr, alloc);
+        } else {
+            for (int i = 0; i < count; i++) {
+                Value* idx0 = ConstantInt::get(Type::getInt32Ty(context), 0);
+                Value* idx1 = ConstantInt::get(Type::getInt32Ty(context), i);
+                Value* gep = builder.CreateInBoundsGEP(arrTy, alloc, {idx0, idx1}, "elem_ptr");
+                builder.CreateStore(elems[i], gep);
+            }
         }
 
         Value* zero = ConstantInt::get(Type::getInt32Ty(context), 0);

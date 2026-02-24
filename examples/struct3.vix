@@ -6,10 +6,10 @@ struct  Woman {
     person: Person
     age: i32
 }
-p1 =  Person {
+let p1 =  Person {
     name: "Mike", age: 20
 }
-emp =  Woman {
+let emp =  Woman {
     person: p1, age: 30
 }
 print(emp.person.name)

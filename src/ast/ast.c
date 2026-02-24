@@ -1521,6 +1521,9 @@ void print_ast(ASTNode* node, int indent) {
         case AST_TYPE_INT64:
             printf("Type: i64\n");
             break;
+        case AST_TYPE_INT8:
+            printf("Type: i8\n");
+            break;
         case AST_TYPE_FLOAT32:
             printf("Type: f32\n");
             break;
@@ -1532,6 +1535,9 @@ void print_ast(ASTNode* node, int indent) {
             break;
         case AST_TYPE_VOID:
             printf("Type: void\n");
+            break;
+        case AST_TYPE_POINTER:
+            printf("Type: ptr\n");
             break;
         case AST_TYPE_LIST:
             printf("Type: List of ");
@@ -1549,6 +1555,26 @@ void print_ast(ASTNode* node, int indent) {
                 }
             }
             printf("\n");
+            break;
+        case AST_TYPE_FIXED_SIZE_LIST:
+            printf("Type: [");
+            if (node->data.fixed_size_list_type.element_type) {
+                switch (node->data.fixed_size_list_type.element_type->type) {
+                    case AST_TYPE_INT32: printf("i32"); break;
+                    case AST_TYPE_INT64: printf("i64"); break;
+                    case AST_TYPE_INT8: printf("i8"); break;
+                    case AST_TYPE_FLOAT32: printf("f32"); break;
+                    case AST_TYPE_FLOAT64: printf("f64"); break;
+                    case AST_TYPE_STRING: printf("string"); break;
+                    case AST_TYPE_VOID: printf("void"); break;
+                    case AST_TYPE_POINTER: printf("ptr"); break;
+                    case AST_IDENTIFIER: printf("%s", node->data.fixed_size_list_type.element_type->data.identifier.name); break;
+                    default: printf("unknown"); break;
+                }
+            } else {
+                printf("unknown");
+            }
+            printf(" * %lld]\n", node->data.fixed_size_list_type.size);
             break;
         case AST_FUNCTION:
             if (node->data.function.is_extern) {

@@ -1129,7 +1129,8 @@ int check_unused_variables_with_usage(ASTNode* node, SymbolTable* table, struct 
             
             add_symbol(table, node->data.function.name, SYMBOL_FUNCTION, TYPE_UNKNOWN);
             SymbolTable* func_scope = create_symbol_table(table);
-            if (node->data.function.params && node->data.function.params->type == AST_EXPRESSION_LIST) {
+            int should_track_params = !(node->data.function.is_extern && node->data.function.body == NULL);
+            if (should_track_params && node->data.function.params && node->data.function.params->type == AST_EXPRESSION_LIST) {
                 for (int i = 0; i < node->data.function.params->data.expression_list.expression_count; i++) {
                     ASTNode* param = node->data.function.params->data.expression_list.expressions[i];
                     if (param->type == AST_IDENTIFIER) {

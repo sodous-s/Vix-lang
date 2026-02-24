@@ -8,13 +8,13 @@ struct  Book {
     author: string,
     year: i32
 }
-p1: Person {
+let p1 = Person {
     name: "Alice", age: 25, height: 5.7
 }
-p2: Person {
+let p2 = Person {
     name: "Bob", age: 30, height: 6.0
 }
-book1: Book {
+let book1 = Book {
     title: "How to coding", author: "Vix Dev Team", year: 2026
 }
 print("Person 1 Name: ", p1.name)
@@ -28,24 +28,24 @@ print("Book Author: ", book1.author)
 print("Book Year: ", book1.year)
 p1.age = 26
 print("Update p1 age: ", p1.age);
-age_diff: p2.age -  p1.age;
+age_diff = p2.age -  p1.age;
 print("Age difference: ", age_diff);
 struct  juxing {
     width: f64,
     height: f64
 }
-rect: juxing {
+let rect = juxing {
     width: 10.5, height: 8.2
 }
 ;
-area: rect.width *  rect.height;
+area = rect.width *  rect.height;
 print("juxing area: ", area);
 struct  Address {
     street: string,
     city: string,
     zip: string
 }
-addr: Address {
+let addr = Address {
     street: "123 Main St", city: "Anytown", zip: "12345"
 }
 ;

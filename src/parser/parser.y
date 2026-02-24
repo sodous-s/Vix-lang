@@ -13,6 +13,73 @@ extern char* yytext;
 extern const char* current_input_filename; 
 void yyerror(const char* s);
 ASTNode* root;
+
+static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc);
+
+static ASTNode* create_default_scalar_value(ASTNode* type_node, YYLTYPE* loc) {
+    if (!type_node) {
+        return create_num_int_node_with_yyltype(0, (void*)loc);
+    }
+
+    switch (type_node->type) {
+        case AST_TYPE_INT8:
+            return create_char_node_with_yyltype(0, (void*)loc);
+        case AST_TYPE_INT32:
+        case AST_TYPE_INT64:
+            return create_num_int_node_with_yyltype(0, (void*)loc);
+        case AST_TYPE_FLOAT32:
+        case AST_TYPE_FLOAT64:
+            return create_num_float_node_with_yyltype(0.0, (void*)loc);
+        case AST_TYPE_STRING:
+        case AST_TYPE_POINTER:
+            return create_nil_node_with_yyltype((void*)loc);
+        case AST_IDENTIFIER:
+            if (type_node->data.identifier.name) {
+                if (strcmp(type_node->data.identifier.name, "char") == 0 ||
+                    strcmp(type_node->data.identifier.name, "i8") == 0 ||
+                    strcmp(type_node->data.identifier.name, "u8") == 0) {
+                    return create_char_node_with_yyltype(0, (void*)loc);
+                }
+                if (strcmp(type_node->data.identifier.name, "f32") == 0 ||
+                    strcmp(type_node->data.identifier.name, "f64") == 0) {
+                    return create_num_float_node_with_yyltype(0.0, (void*)loc);
+                }
+                if (strcmp(type_node->data.identifier.name, "str") == 0 ||
+                    strcmp(type_node->data.identifier.name, "ptr") == 0) {
+                    return create_nil_node_with_yyltype((void*)loc);
+                }
+            }
+            return create_num_int_node_with_yyltype(0, (void*)loc);
+        case AST_TYPE_FIXED_SIZE_LIST:
+        case AST_TYPE_LIST:
+            return create_default_value_for_type(type_node, loc);
+        default:
+            return create_num_int_node_with_yyltype(0, (void*)loc);
+    }
+}
+
+static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc) {
+    if (!type_node) {
+        return create_num_int_node_with_yyltype(0, (void*)loc);
+    }
+
+    if (type_node->type == AST_TYPE_FIXED_SIZE_LIST) {
+        ASTNode* list = create_expression_list_node_with_yyltype((void*)loc);
+        long long size = type_node->data.fixed_size_list_type.size;
+        ASTNode* elem_type = type_node->data.fixed_size_list_type.element_type;
+        if (size < 0) size = 0;
+        for (long long i = 0; i < size; i++) {
+            add_expression_to_list(list, create_default_scalar_value(elem_type, loc));
+        }
+        return list;
+    }
+
+    if (type_node->type == AST_TYPE_LIST) {
+        return create_expression_list_node_with_yyltype((void*)loc);
+    }
+
+    return create_default_scalar_value(type_node, loc);
+}
 %}
 
 %union {
@@ -102,8 +169,19 @@ statement
         $$ = create_assign_node_with_yyltype($2, $6, (YYLTYPE*) &@$);
         $$->data.assign.is_declaration = 1;
     }
+    | LET identifier COLON type SEMICOLON {
+        ASTNode* init = create_default_value_for_type($4, (YYLTYPE*) &@$);
+        $$ = create_assign_node_with_yyltype($2, init, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
     | LET MUT identifier COLON type ASSIGN expression SEMICOLON {
         $$ = create_assign_node_with_yyltype($3, $7, (YYLTYPE*) &@$);
+        $3->mutability = MUTABILITY_MUTABLE;
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET MUT identifier COLON type SEMICOLON {
+        ASTNode* init = create_default_value_for_type($5, (YYLTYPE*) &@$);
+        $$ = create_assign_node_with_yyltype($3, init, (YYLTYPE*) &@$);
         $3->mutability = MUTABILITY_MUTABLE;
         $$->data.assign.is_declaration = 1;
     }
@@ -148,8 +226,19 @@ statement
         $$ = create_assign_node_with_yyltype($2, $6, (YYLTYPE*) &@$);
         $$->data.assign.is_declaration = 1;
     }
+    | LET identifier COLON type {
+        ASTNode* init = create_default_value_for_type($4, (YYLTYPE*) &@$);
+        $$ = create_assign_node_with_yyltype($2, init, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
     | LET MUT identifier COLON type ASSIGN expression {
         $$ = create_assign_node_with_yyltype($3, $7, (YYLTYPE*) &@$);
+        $3->mutability = MUTABILITY_MUTABLE;
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET MUT identifier COLON type {
+        ASTNode* init = create_default_value_for_type($5, (YYLTYPE*) &@$);
+        $$ = create_assign_node_with_yyltype($3, init, (YYLTYPE*) &@$);
         $3->mutability = MUTABILITY_MUTABLE;
         $$->data.assign.is_declaration = 1;
     }
@@ -166,6 +255,8 @@ statement
     | STRUCT IDENTIFIER LBRACE struct_fields RBRACE { $$ = create_struct_def_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
     | RETURN expression SEMICOLON  { $$ = create_return_node_with_yyltype($2, (YYLTYPE*) &@$); }
     | RETURN expression            { $$ = create_return_node_with_yyltype($2, (YYLTYPE*) &@$); }
+    | RETURN SEMICOLON             { $$ = create_return_node_with_yyltype(NULL, (YYLTYPE*) &@$); }
+    | RETURN                       { $$ = create_return_node_with_yyltype(NULL, (YYLTYPE*) &@$); }
     | expression SEMICOLON         { $$ = $1; }
     | expression                   { $$ = $1; }
     | CONST identifier ASSIGN expression { $$ = create_const_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
