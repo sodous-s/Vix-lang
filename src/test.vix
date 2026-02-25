@@ -1,8 +1,9 @@
 type Color =  Red 
             | Green 
             | Blue
-type Number = One 
+type Number = One // ~=enum
             | Ten
+
 fn main() ->i32
 {
     let c = Red
@@ -24,7 +25,7 @@ fn main() ->i32
                 print(i)
             }
         }
-        _ -> print("ten")
+        _ -> print("no match")
     }
     return 0
 }
