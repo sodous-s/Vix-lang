@@ -1,0 +1,34 @@
+import "std/os.vix"
+
+struct dirent {
+    d_name: [char * 256]
+}
+
+fn list_dir(path: ptr) {
+    let dir = opendir(path)
+    if (dir == 0) {
+        printf("ls: cannt open the dir  %s\n", path)
+    }
+    
+    while(1) {
+        let ent = readdir(dir)
+        if (ent == 0) { break }
+        let name_ptr = ent.d_name
+        if (name_ptr == 0) { continue }
+        if (name_ptr[0] == 0) { continue }
+        if (name_ptr[0] == '.') {
+            if (name_ptr[1] == 0) { continue }
+            if (name_ptr[1] == '.' and name_ptr[2] == 0) { continue }
+        }
+        
+        printf("%s  ", name_ptr)
+    }
+    printf("\n")
+    closedir(dir)
+}
+
+fn main(argc: i32, argv: ptr) -> i32 {
+    if (argc < 2) { list_dir(".") }
+    else { list_dir(argv[1]) }
+    return 0
+}

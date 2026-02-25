@@ -9,27 +9,3 @@ fn main() ->  i32 {
     print(arr.length)
     return  0
 }
-/*
-tips:
-在Vix语言中，数组作为参数传递时，长度信息丢失了
-if:fn arr_loop(arr: [i32])  // 这是一个不定长数组类型
-运行结果：
-啥也没有...
-原因:
-只传递了数组的指针，没有传递长度信息
-在LLVM IR中变成了 ptr 类型
-函数内部无法获取 arr.length
-解决方法：
-显示传递数组长度作为参数
-fn arr_loop(arr:[i32],len:i32)
-调用时传递 arr.length
-arr_loop(arr, arr.length)
-运行结果：
-5
-2
-8
-1
-9
-10
-6
-*/

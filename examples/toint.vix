@@ -1,2 +1,2 @@
-a =  toint(input(">"))
+let a =  toint(input(">"))
 print(a + 1)

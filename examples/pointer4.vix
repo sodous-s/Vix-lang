@@ -8,20 +8,20 @@ fn set_by_ptr(mut p: & i32, v: i32) {
 }
 
 fn main() -> i32 {
-	x = 10
-	mut ptr = &x
+	let x = 10
+	let mut ptr = &x
 	print(@ptr)
 	@ptr = 20
 	print(x)
-	arr = [1, 2, 3, 4, 5]
-	p = &arr[0]
-	second = @(p + 1)
+	let arr = [1, 2, 3, 4, 5]
+	let p = &arr[0]
+	let second = @(p + 1)
 	print(second)
-	person= Person {
+	let person= Person {
 		age: 18,
 		score: 95
 	}
-	mut age_ptr = &person.age
+	let mut age_ptr = &person.age
 	print(@age_ptr)
 	@age_ptr = 21
 	print(person.age)

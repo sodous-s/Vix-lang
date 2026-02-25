@@ -8,6 +8,7 @@ extern "C" {
 #include <stdio.h>
 typedef struct ASTNode ASTNode;
 void llvm_emit_from_ast(ASTNode* ast_root, FILE* llvm_fp);
+void llvm_set_target_triple(const char* triple);
 
 #ifdef __cplusplus
 }//c api
