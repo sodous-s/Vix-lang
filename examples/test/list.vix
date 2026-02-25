@@ -1,4 +1,4 @@
-let a = ["python", "js", "vix"]
+let a = ["zig", "rust", "vix"]
 let n = 3
 let i = 0
 while (i <  n) {
