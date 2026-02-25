@@ -1,4 +1,4 @@
-type Color =  Red 
+type Color =  Red //类似于enum
             | Green 
             | Blue
 type Number = One 

@@ -144,6 +144,8 @@ char* process_escape_sequences(const char* input, size_t input_len) {
 "or"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return OR; }
 "import"           { UPDATE_COLUMN(); yylval.str = strdup(yytext); return IMPORT; }
 "pub"               { UPDATE_COLUMN(); yylval.str = strdup(yytext); return PUB; }
+"type"              { UPDATE_COLUMN(); yylval.str = strdup(yytext); return TYPE_KW; }
+"match"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return MATCH; }
 
 "="                 { UPDATE_COLUMN(); return ASSIGN; }
 "+="                { UPDATE_COLUMN(); return PLUS_ASSIGN; }
@@ -179,6 +181,7 @@ char* process_escape_sequences(const char* input, size_t input_len) {
 ".."                { UPDATE_COLUMN(); return DOTDOT; }
 "."                 { UPDATE_COLUMN(); return DOT; }
 ":"                 { UPDATE_COLUMN(); return COLON; }
+"|"                 { UPDATE_COLUMN(); return PIPE; }
 
 [a-zA-Z_][a-zA-Z0-9_]*!?  {
                         int col = GET_FIRST_COLUMN();

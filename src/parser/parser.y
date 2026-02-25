@@ -15,6 +15,8 @@ void yyerror(const char* s);
 ASTNode* root;
 
 static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc);
+static ASTNode* build_type_alias_enum(const char* type_name, ASTNode* variants);
+static ASTNode* build_match_desugared(ASTNode* scrutinee, ASTNode* arms);
 
 static ASTNode* create_default_scalar_value(ASTNode* type_node, YYLTYPE* loc) {
     if (!type_node) {
@@ -80,6 +82,96 @@ static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc) 
 
     return create_default_scalar_value(type_node, loc);
 }
+
+static ASTNode* build_type_alias_enum(const char* type_name, ASTNode* variants) {
+    (void)type_name;
+    ASTNode* program = create_program_node();
+    if (!variants || variants->type != AST_EXPRESSION_LIST) {
+        return program;
+    }
+
+    for (int i = 0; i < variants->data.expression_list.expression_count; i++) {
+        ASTNode* variant = variants->data.expression_list.expressions[i];
+        if (!variant || variant->type != AST_IDENTIFIER || !variant->data.identifier.name) continue;
+        ASTNode* left = create_identifier_node(variant->data.identifier.name);
+        ASTNode* right = create_num_int_node(i);
+        ASTNode* decl = create_const_node(left, right);
+        add_statement_to_program(program, decl);
+    }
+    return program;
+}
+static ASTNode* clone_match_scrutinee(ASTNode* scrutinee) {
+    if (!scrutinee) return NULL;
+    switch (scrutinee->type) {
+        case AST_IDENTIFIER:
+            if (scrutinee->data.identifier.name) {
+                return create_identifier_node(scrutinee->data.identifier.name);
+            }//如果 scrutinee 或 arms 为空，或者 arms 不是表达式列表，返回 NULL
+            return NULL;
+        case AST_NUM_INT:
+            return create_num_int_node(scrutinee->data.num_int.value);
+        case AST_NUM_FLOAT:
+            return create_num_float_node(scrutinee->data.num_float.value);
+        case AST_CHAR:
+            return create_char_node(scrutinee->data.character.value);
+        case AST_STRING:
+            if (scrutinee->data.string.value) {
+                return create_string_node(scrutinee->data.string.value);
+            }
+            return NULL;
+        case AST_NIL:
+            return create_nil_node();
+        default:
+            return NULL;
+    }
+}
+
+static ASTNode* build_match_desugared(ASTNode* scrutinee, ASTNode* arms) {
+    if (!scrutinee || !arms || arms->type != AST_EXPRESSION_LIST) return NULL;
+
+    int count = arms->data.expression_list.expression_count;
+    ASTNode* chain = NULL;
+
+    for (int i = count - 1; i >= 0; i--) {
+        ASTNode* arm = arms->data.expression_list.expressions[i];
+        if (!arm || arm->type != AST_ASSIGN || !arm->data.assign.left || !arm->data.assign.right) continue;
+
+        ASTNode* pattern = arm->data.assign.left;
+        ASTNode* body = arm->data.assign.right;
+        if (pattern && pattern->type == AST_IDENTIFIER && pattern->data.identifier.name &&
+            strcmp(pattern->data.identifier.name, "_") == 0) {
+            if (i != count - 1) {
+                int line = pattern->location.first_line > 0 ? pattern->location.first_line : yylineno;
+                int col = pattern->location.first_column > 0 ? pattern->location.first_column : 1;
+                set_location_with_column(current_input_filename ? current_input_filename : "unknown", line, col);
+                report_simple_error(ERROR_LEVEL_WARNING, ERROR_WARNING,
+                    "'_' match arm should be the last arm!");
+            }
+            chain = body;
+            continue;
+        }
+
+        ASTNode* cond_left = clone_match_scrutinee(scrutinee);//克隆 scrutinee 以构建条件表达式，确保不修改原始 scrutinee
+        ASTNode* cond_right = clone_match_scrutinee(pattern);//克隆模式以构建条件表达式，确保不修改原始模式
+        if (!cond_right && pattern->type == AST_IDENTIFIER && pattern->data.identifier.name) {
+            cond_right = create_identifier_node(pattern->data.identifier.name);//如果模式是一个标识符但无法克隆，直接创建一个新的标识符节点
+        }
+
+        if (!cond_left || !cond_right) {
+            continue;
+        }
+
+        ASTNode* cond = create_binop_node(OP_EQ, cond_left, cond_right);//构建条件表达式：scrutinee == pattern
+        chain = create_if_node(cond, body, chain);//构建 if-else 链：if (xxxx == xxxxx) { body } else do_something_e
+    }
+
+    return chain;
+}
+/*
+build_type_alias_enum：将枚举类型转换为常量定义
+clone_match_scrutinee：克隆 match 语句的 scrutinee，确保在生成条件表达式时不会修改原始 scrutinee
+build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
+*/
 %}
 
 %union {
@@ -91,6 +183,7 @@ static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc) 
 
 %token <str> IDENTIFIER STRING CHAR_LITERAL
 %token STRUCT COLON
+%token TYPE_KW MATCH PIPE
 %token CONST LET MUT GLOBAL
 %token IMPORT PUB
 %token <num_int> NUMBER_INT
@@ -122,6 +215,7 @@ static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc) 
 %type <node> literal identifier toint_expression tofloat_expression input_expression
 %type <node> block_statement if_rest expression_list
 %type <node> lvalue
+%type <node> type_definition enum_variant_list match_statement match_arms match_arm match_arm_body match_target match_arm_pattern
 
 %nonassoc IF
 %nonassoc ELSE
@@ -253,6 +347,8 @@ statement
     | function_definition           { $$ = $1; }
     | extern_block                 { $$ = $1; }
     | STRUCT IDENTIFIER LBRACE struct_fields RBRACE { $$ = create_struct_def_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
+    | type_definition              { $$ = $1; }
+    | match_statement              { $$ = $1; }
     | RETURN expression SEMICOLON  { $$ = create_return_node_with_yyltype($2, (YYLTYPE*) &@$); }
     | RETURN expression            { $$ = create_return_node_with_yyltype($2, (YYLTYPE*) &@$); }
     | RETURN SEMICOLON             { $$ = create_return_node_with_yyltype(NULL, (YYLTYPE*) &@$); }
@@ -278,6 +374,63 @@ statement
     | CONTINUE SEMICOLON            { $$ = create_continue_node_with_yyltype((YYLTYPE*) &@$); }
     | BREAK                         { $$ = create_break_node_with_yyltype((YYLTYPE*) &@$); }
     | CONTINUE                      { $$ = create_continue_node_with_yyltype((YYLTYPE*) &@$); }
+    ;
+
+type_definition
+    : TYPE_KW IDENTIFIER ASSIGN enum_variant_list {
+        $$ = build_type_alias_enum($2, $4);
+    }
+    ;
+
+enum_variant_list
+    : IDENTIFIER {
+        ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(list, create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$));
+        $$ = list;
+    }
+    | enum_variant_list PIPE IDENTIFIER {
+        add_expression_to_list($1, create_identifier_node_with_yyltype($3, (YYLTYPE*) &@$));
+        $$ = $1;
+    }
+    ;
+
+match_statement
+    : MATCH match_target LBRACE match_arms RBRACE {
+        $$ = build_match_desugared($2, $4);
+    }
+    ;
+
+match_target
+    : identifier { $$ = $1; }
+    | literal { $$ = $1; }
+    | LPAREN expression RPAREN { $$ = $2; }
+    ;
+
+match_arms
+    : match_arm {
+        ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(list, $1);
+        $$ = list;
+    }
+    | match_arms match_arm {
+        add_expression_to_list($1, $2);
+        $$ = $1;
+    }
+    ;
+
+match_arm
+    : match_arm_pattern ARROW match_arm_body {
+        $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$);
+    }
+    ;
+
+match_arm_pattern
+    : identifier { $$ = $1; }
+    | literal { $$ = $1; }
+    ;
+
+match_arm_body
+    : block_statement { $$ = $1; }
     ;
 
 input_expression

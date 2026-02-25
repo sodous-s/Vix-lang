@@ -3388,7 +3388,6 @@ public:
                 return VisitResult(loaded, vt);
             }
         }
-
         VisitResult targetRes = visit(target);
         if (!targetRes.value) return VisitResult();
 
