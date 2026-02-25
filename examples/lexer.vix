@@ -1,3 +1,10 @@
+type Token = String
+            | Number
+            | Operator
+            | Identifier
+            | Equals
+            | Unknown
+        
 fn lexer(s:string) -> i32 {
     for (i in 0 .. s.length) {
         let c = s[i]

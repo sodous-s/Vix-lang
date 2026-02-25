@@ -3,6 +3,7 @@ type Color =  Red //类似于enum
             | Blue
 type Number = One 
             | Ten
+    
 fn main() ->i32
 {
     let c = Red

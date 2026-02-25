@@ -1,31 +1,4 @@
-type Color =  Red 
-            | Green 
-            | Blue
-type Number = One // ~=enum
-            | Ten
-
 fn main() ->i32
 {
-    let c = Red
-    match c {
-        Red -> print("red")
-        Green -> print("green")
-        Blue -> print("blue")
-    }
-    let  a = One
-    match a {
-        One -> print("one")
-        _ -> print("ten")
-        Ten -> print("?")
-    }
-    match a{
-        One ->{
-            for(i in 0 .. 10)
-            {
-                print(i)
-            }
-        }
-        _ -> print("no match")
-    }
     return 0
 }
