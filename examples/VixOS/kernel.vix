@@ -46,7 +46,7 @@ fn write_string(strs: ptr) {
 
 #[export]
 fn kernel_main() {
-    write_string("Hello VixOS!")
+    write_string("Welcome to VixOS!")
     while (1) {}
 }
 

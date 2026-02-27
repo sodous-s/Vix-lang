@@ -1,4 +1,13 @@
+fn a()
+{
+    print("Hello world!")
+}
+fn b()
+{
+    a()
+}
 fn main() ->i32
 {
+    b()
     return 0
 }

@@ -70,6 +70,34 @@ char* process_escape_sequences(const char* input, size_t input_len) {
     result[result_idx] = '\0';
     return result;
 }
+
+static int decode_char_literal(const char* text, size_t len, unsigned char* out) {
+    if (!text || len < 3 || text[0] != '\'' || text[len - 1] != '\'') {
+        return 0;
+    }
+
+    const char* body = text + 1;
+    size_t body_len = len - 2;
+    if (body_len == 0) return 0;
+
+    if (body[0] != '\\') {
+        if (body_len != 1) return 0;
+        *out = (unsigned char)body[0];
+        return 1;
+    }
+
+    if (body_len != 2) return 0;
+    switch (body[1]) {
+        case 'n': *out = (unsigned char)'\n'; return 1;
+        case 't': *out = (unsigned char)'\t'; return 1;
+        case 'r': *out = (unsigned char)'\r'; return 1;
+        case '0': *out = (unsigned char)'\0'; return 1;
+        case '\\': *out = (unsigned char)'\\'; return 1;
+        case '\'': *out = (unsigned char)'\''; return 1;
+        case '"': *out = (unsigned char)'"'; return 1;
+        default: return 0;
+    }
+}
 %}
 
 %option noyywrap
@@ -235,9 +263,14 @@ char* process_escape_sequences(const char* input, size_t input_len) {
                         return STRING;
                       }
 
-\'[^\']{1}\'        {
+\'([^\\\'\n]|\\[nrt0\\\'\"])\'        {
                         int col = GET_FIRST_COLUMN();
-                        yylval.str = my_strndup(yytext + 1, yyleng - 2);
+                        unsigned char c = 0;
+                        if (!decode_char_literal(yytext, (size_t)yyleng, &c)) {
+                            report_lexical_error_with_location("Invalid char literal", current_input_filename ? current_input_filename : "unknown", yylineno);
+                            return ERROR;
+                        }
+                        yylval.num_int = (long long)c;
                         yylloc.first_line = yylineno;
                         yylloc.first_column = col;
                         yylloc.last_line = yylineno;

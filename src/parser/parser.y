@@ -181,12 +181,12 @@ build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
     struct ASTNode* node;
 }
 
-%token <str> IDENTIFIER STRING CHAR_LITERAL
+%token <str> IDENTIFIER STRING
 %token STRUCT COLON
 %token TYPE_KW MATCH PIPE
 %token CONST LET MUT GLOBAL
 %token IMPORT PUB
-%token <num_int> NUMBER_INT
+%token <num_int> NUMBER_INT CHAR_LITERAL
 %token <num_float> NUMBER_FLOAT
 %token PRINT INPUT TOINT TOFLOAT TYPE_I32 TYPE_I64 TYPE_I8 TYPE_F32 TYPE_F64 TYPE_STR TYPE_PTR FN ARROW RETURN TYPE_VOID NIL EXTERN DOTDOTDOT
 %token AND OR
@@ -814,7 +814,7 @@ literal
     : NUMBER_INT                    { $$ = create_num_int_node_with_yyltype($1, (YYLTYPE*) &@$); }
     | NUMBER_FLOAT                  { $$ = create_num_float_node_with_yyltype($1, (YYLTYPE*) &@$); }
     | STRING                        { $$ = create_string_node_with_yyltype($1, (YYLTYPE*) &@$); }
-    | CHAR_LITERAL                  { $$ = create_char_node_with_yyltype($1[0], (YYLTYPE*) &@$); }
+    | CHAR_LITERAL                  { $$ = create_char_node_with_yyltype((char)$1, (YYLTYPE*) &@$); }
     | NIL                           { $$ = create_nil_node_with_yyltype((YYLTYPE*) &@$); }
     | LBRACKET RBRACKET             { $$ = create_expression_list_node_with_yyltype((YYLTYPE*) &@$); }
     | LBRACKET expression_list RBRACKET { $$ = $2; }
