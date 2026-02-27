@@ -151,6 +151,7 @@ ASTNode* create_assign_node_with_location(ASTNode* left, ASTNode* right, Locatio
     node->data.assign.left = left;
     node->data.assign.right = right;
     node->data.assign.is_declaration = 0;
+    node->data.assign.is_public = 0;
     return node;
 }
 
@@ -161,6 +162,7 @@ ASTNode* create_const_node_with_location(ASTNode* left, ASTNode* right, Location
     node->data.assign.left = left;
     node->data.assign.right = right;
     node->data.assign.is_declaration = 0;
+    node->data.assign.is_public = 0;
     return node;
 }
 
@@ -197,6 +199,7 @@ ASTNode* create_assign_node_with_yyltype(ASTNode* left, ASTNode* right, void* yy
     node->data.assign.left = left;
     node->data.assign.right = right;
     node->data.assign.is_declaration = 0;
+    node->data.assign.is_public = 0;
     node->mutability = MUTABILITY_IMMUTABLE;//默认为不可变
     
     return node;
@@ -210,6 +213,7 @@ ASTNode* create_assign_node_with_mutability(ASTNode* left, ASTNode* right, Mutab
     node->data.assign.left = left;
     node->data.assign.right = right;
     node->data.assign.is_declaration = 0;
+    node->data.assign.is_public = 0;
     node->mutability = mutability;
     
     return node;
@@ -1722,21 +1726,31 @@ static void inline_imports_in_node(ASTNode* node) {
                                 inserted_externs[inserted_extern_count++] = strdup(s->data.function.name);
                             }
                         }
+                    } else if (s->type == AST_CONST) {
+                        if (s->data.assign.is_public) {
+                            add_count++;
+                        }
                     } else if (s->type == AST_PROGRAM) {
                         for (int jj = 0; jj < s->data.program.statement_count; jj++) {
                             ASTNode* t = s->data.program.statements[jj];
-                            if (!t || t->type != AST_FUNCTION) continue;
-                            if (t->data.function.is_public) {
-                                add_count++;
-                            } else if (t->data.function.is_extern && t->data.function.name) {
-                                int found = 0;
-                                for (int e = 0; e < inserted_extern_count; e++) {
-                                    if (strcmp(inserted_externs[e], t->data.function.name) == 0) { found = 1; break; }
-                                }
-                                if (!found) {
+                            if (!t) continue;
+                            if (t->type == AST_FUNCTION) {
+                                if (t->data.function.is_public) {
                                     add_count++;
-                                    inserted_externs = realloc(inserted_externs, sizeof(char*) * (inserted_extern_count + 1));
-                                    inserted_externs[inserted_extern_count++] = strdup(t->data.function.name);
+                                } else if (t->data.function.is_extern && t->data.function.name) {
+                                    int found = 0;
+                                    for (int e = 0; e < inserted_extern_count; e++) {
+                                        if (strcmp(inserted_externs[e], t->data.function.name) == 0) { found = 1; break; }
+                                    }
+                                    if (!found) {
+                                        add_count++;
+                                        inserted_externs = realloc(inserted_externs, sizeof(char*) * (inserted_extern_count + 1));
+                                        inserted_externs[inserted_extern_count++] = strdup(t->data.function.name);
+                                    }
+                                }
+                            } else if (t->type == AST_CONST) {
+                                if (t->data.assign.is_public) {
+                                    add_count++;
                                 }
                             }
                         }
@@ -1774,22 +1788,34 @@ static void inline_imports_in_node(ASTNode* node) {
                             module_root->data.program.statements[j] = NULL;
                         }
                         }
+                    } else if (s->type == AST_CONST) {
+                        if (s->data.assign.is_public) {
+                            new_statements[idx++] = s;
+                            module_root->data.program.statements[j] = NULL;
+                        }
                     } else if (s->type == AST_PROGRAM) {
                         for (int jj = 0; jj < s->data.program.statement_count; jj++) {
                             ASTNode* t = s->data.program.statements[jj];
-                            if (!t || t->type != AST_FUNCTION) continue;
-                            if (t->data.function.is_public) {
-                                new_statements[idx++] = t;
-                                s->data.program.statements[jj] = NULL;
-                            } else if (t->data.function.is_extern && t->data.function.name) {
-                                int already_moved = 0;
-                                for (int p = 0; p < idx; p++) {
-                                    ASTNode* moved = new_statements[p];
-                                    if (moved && moved->type == AST_FUNCTION && moved->data.function.is_extern && moved->data.function.name && strcmp(moved->data.function.name, t->data.function.name) == 0) {
-                                        already_moved = 1; break;
+                            if (!t) continue;
+                            if (t->type == AST_FUNCTION) {
+                                if (t->data.function.is_public) {
+                                    new_statements[idx++] = t;
+                                    s->data.program.statements[jj] = NULL;
+                                } else if (t->data.function.is_extern && t->data.function.name) {
+                                    int already_moved = 0;
+                                    for (int p = 0; p < idx; p++) {
+                                        ASTNode* moved = new_statements[p];
+                                        if (moved && moved->type == AST_FUNCTION && moved->data.function.is_extern && moved->data.function.name && strcmp(moved->data.function.name, t->data.function.name) == 0) {
+                                            already_moved = 1; break;
+                                        }
+                                    }
+                                    if (!already_moved) {
+                                        new_statements[idx++] = t;
+                                        s->data.program.statements[jj] = NULL;
                                     }
                                 }
-                                if (!already_moved) {
+                            } else if (t->type == AST_CONST) {
+                                if (t->data.assign.is_public) {
                                     new_statements[idx++] = t;
                                     s->data.program.statements[jj] = NULL;
                                 }

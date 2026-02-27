@@ -16,6 +16,7 @@ ASTNode* root;
 
 static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc);
 static ASTNode* build_type_alias_enum(const char* type_name, ASTNode* variants);
+static ASTNode* mark_type_alias_public(ASTNode* program);
 static ASTNode* build_match_desugared(ASTNode* scrutinee, ASTNode* arms);
 
 static ASTNode* create_default_scalar_value(ASTNode* type_node, YYLTYPE* loc) {
@@ -100,6 +101,18 @@ static ASTNode* build_type_alias_enum(const char* type_name, ASTNode* variants) 
     }
     return program;
 }
+
+static ASTNode* mark_type_alias_public(ASTNode* program) {
+    if (!program || program->type != AST_PROGRAM) return program;
+    for (int i = 0; i < program->data.program.statement_count; i++) {
+        ASTNode* stmt = program->data.program.statements[i];
+        if (stmt && stmt->type == AST_CONST) {
+            stmt->data.assign.is_public = 1;
+        }
+    }
+    return program;
+}
+
 static ASTNode* clone_match_scrutinee(ASTNode* scrutinee) {
     if (!scrutinee) return NULL;
     switch (scrutinee->type) {
@@ -211,7 +224,7 @@ build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
 %type <node> type param_list function_definition pub_function_definition
 %type <node> print_statement assignment_statement compound_assignment_statement
 %type <node> input_statement if_statement while_statement for_statement
-%type <node> expression logical_expression comparison_expression term factor power factor_unary
+%type <node> expression logical_expression comparison_expression additive_expression term factor power factor_unary
 %type <node> literal identifier toint_expression tofloat_expression input_expression
 %type <node> block_statement if_rest expression_list
 %type <node> lvalue
@@ -379,6 +392,9 @@ statement
 type_definition
     : TYPE_KW IDENTIFIER ASSIGN enum_variant_list {
         $$ = build_type_alias_enum($2, $4);
+    }
+    | PUB TYPE_KW IDENTIFIER ASSIGN enum_variant_list {
+        $$ = mark_type_alias_public(build_type_alias_enum($3, $5));
     }
     ;
 
@@ -743,19 +759,23 @@ logical_expression
     ;
 
 comparison_expression
-    : term                                  { $$ = $1; }
-    | term EQ term                          { $$ = create_binop_node_with_yyltype(OP_EQ, $1, $3, (YYLTYPE*) &@$); }
-    | term NE term                          { $$ = create_binop_node_with_yyltype(OP_NE, $1, $3, (YYLTYPE*) &@$); }
-    | term LT term                          { $$ = create_binop_node_with_yyltype(OP_LT, $1, $3, (YYLTYPE*) &@$); }
-    | term LE term                          { $$ = create_binop_node_with_yyltype(OP_LE, $1, $3, (YYLTYPE*) &@$); }
-    | term GT term                          { $$ = create_binop_node_with_yyltype(OP_GT, $1, $3, (YYLTYPE*) &@$); }
-    | term GE term                          { $$ = create_binop_node_with_yyltype(OP_GE, $1, $3, (YYLTYPE*) &@$); }
+    : additive_expression                                  { $$ = $1; }
+    | additive_expression EQ additive_expression            { $$ = create_binop_node_with_yyltype(OP_EQ, $1, $3, (YYLTYPE*) &@$); }
+    | additive_expression NE additive_expression            { $$ = create_binop_node_with_yyltype(OP_NE, $1, $3, (YYLTYPE*) &@$); }
+    | additive_expression LT additive_expression            { $$ = create_binop_node_with_yyltype(OP_LT, $1, $3, (YYLTYPE*) &@$); }
+    | additive_expression LE additive_expression            { $$ = create_binop_node_with_yyltype(OP_LE, $1, $3, (YYLTYPE*) &@$); }
+    | additive_expression GT additive_expression            { $$ = create_binop_node_with_yyltype(OP_GT, $1, $3, (YYLTYPE*) &@$); }
+    | additive_expression GE additive_expression            { $$ = create_binop_node_with_yyltype(OP_GE, $1, $3, (YYLTYPE*) &@$); }
     ;
 
 expression
     : logical_expression                    { $$ = $1; }
-    | expression PLUS logical_expression    { $$ = create_binop_node_with_yyltype(OP_ADD, $1, $3, (YYLTYPE*) &@$); }
-    | expression MINUS logical_expression   { $$ = create_binop_node_with_yyltype(OP_SUB, $1, $3, (YYLTYPE*) &@$); }
+    ;
+
+additive_expression
+    : term                                  { $$ = $1; }
+    | additive_expression PLUS term         { $$ = create_binop_node_with_yyltype(OP_ADD, $1, $3, (YYLTYPE*) &@$); }
+    | additive_expression MINUS term        { $$ = create_binop_node_with_yyltype(OP_SUB, $1, $3, (YYLTYPE*) &@$); }
     ;
 
 term

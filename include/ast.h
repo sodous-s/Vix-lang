@@ -124,6 +124,7 @@ typedef struct ASTNode {
             struct ASTNode* right;
             MutabilityType mutability; //可变性标记
             int is_declaration;
+            int is_public;
         } assign;
         struct {
             struct ASTNode* left;

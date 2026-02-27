@@ -1,0 +1,7 @@
+import "lexer.vix"
+fn main() ->i32
+{
+    let code = "fn main() ->i32 {return 0}"
+    lexer(code)
+    return 0
+}
