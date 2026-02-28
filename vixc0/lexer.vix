@@ -9,6 +9,8 @@ pub type TokenKind = TkKwFn
                | TkIdent
                | TkNumber
                | TkArrow
+               | TkColon
+               | TkComma
                | TkLParen
                | TkRParen
                | TkLBrace
@@ -60,6 +62,8 @@ pub fn emit_token(kind: TokenKind, src: string, start: i32, end: i32) -> i32
         TkIdent -> span("IDENT", src, start, end)
         TkNumber -> span("NUMBER", src, start, end)
         TkArrow -> span("ARROW", src, start, end)
+        TkColon -> span("COLON", src, start, end)
+        TkComma -> span("COMMA", src, start, end)
         TkLParen -> span("LPAREN", src, start, end)
         TkRParen -> span("RPAREN", src, start, end)
         TkLBrace -> span("LBRACE", src, start, end)
@@ -105,6 +109,16 @@ pub fn lexer(src: string) -> i32
         elif (c == '(')
         {
             emit_token(TkLParen, src, i, i + 1)
+            i += 1
+        }
+        elif (c == ':')
+        {
+            emit_token(TkColon, src, i, i + 1)
+            i += 1
+        }
+        elif (c == ',')
+        {
+            emit_token(TkComma, src, i, i + 1)
             i += 1
         }
         elif (c == ')')

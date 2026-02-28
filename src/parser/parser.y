@@ -360,6 +360,10 @@ statement
     | function_definition           { $$ = $1; }
     | extern_block                 { $$ = $1; }
     | STRUCT IDENTIFIER LBRACE struct_fields RBRACE { $$ = create_struct_def_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
+    | PUB STRUCT IDENTIFIER LBRACE struct_fields RBRACE {
+        $$ = create_struct_def_node_with_yyltype($3, $5, (YYLTYPE*) &@$);
+        $$->data.struct_def.is_public = 1;
+    }
     | type_definition              { $$ = $1; }
     | match_statement              { $$ = $1; }
     | RETURN expression SEMICOLON  { $$ = create_return_node_with_yyltype($2, (YYLTYPE*) &@$); }

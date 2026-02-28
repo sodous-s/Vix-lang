@@ -198,6 +198,7 @@ typedef struct ASTNode {
         struct {
             char* name;
             struct ASTNode* fields;
+            int is_public;
         } struct_def;
         struct {
             struct ASTNode* type_name;

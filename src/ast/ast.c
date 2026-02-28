@@ -813,6 +813,7 @@ ASTNode* create_struct_def_node_with_location(const char* name, ASTNode* fields,
     node->data.struct_def.name = malloc(strlen(name) + 1);
     strcpy(node->data.struct_def.name, name);
     node->data.struct_def.fields = fields;
+    node->data.struct_def.is_public = 0;
     return node;
 }
 
@@ -1613,7 +1614,11 @@ void print_ast(ASTNode* node, int indent) {
             if (node->data.call.args) print_ast(node->data.call.args, indent + 1);
             break;
         case AST_STRUCT_DEF:
-            printf("StructDef: %s\n", node->data.struct_def.name);
+            if (node->data.struct_def.is_public) {
+                printf("Public StructDef: %s\n", node->data.struct_def.name);
+            } else {
+                printf("StructDef: %s\n", node->data.struct_def.name);
+            }
             if (node->data.struct_def.fields) print_ast(node->data.struct_def.fields, indent + 1);
             break;
         case AST_STRUCT_LITERAL:
@@ -1730,6 +1735,10 @@ static void inline_imports_in_node(ASTNode* node) {
                         if (s->data.assign.is_public) {
                             add_count++;
                         }
+                    } else if (s->type == AST_STRUCT_DEF) {
+                        if (s->data.struct_def.is_public) {
+                            add_count++;
+                        }
                     } else if (s->type == AST_PROGRAM) {
                         for (int jj = 0; jj < s->data.program.statement_count; jj++) {
                             ASTNode* t = s->data.program.statements[jj];
@@ -1750,6 +1759,10 @@ static void inline_imports_in_node(ASTNode* node) {
                                 }
                             } else if (t->type == AST_CONST) {
                                 if (t->data.assign.is_public) {
+                                    add_count++;
+                                }
+                            } else if (t->type == AST_STRUCT_DEF) {
+                                if (t->data.struct_def.is_public) {
                                     add_count++;
                                 }
                             }
@@ -1793,6 +1806,11 @@ static void inline_imports_in_node(ASTNode* node) {
                             new_statements[idx++] = s;
                             module_root->data.program.statements[j] = NULL;
                         }
+                    } else if (s->type == AST_STRUCT_DEF) {
+                        if (s->data.struct_def.is_public) {
+                            new_statements[idx++] = s;
+                            module_root->data.program.statements[j] = NULL;
+                        }
                     } else if (s->type == AST_PROGRAM) {
                         for (int jj = 0; jj < s->data.program.statement_count; jj++) {
                             ASTNode* t = s->data.program.statements[jj];
@@ -1816,6 +1834,11 @@ static void inline_imports_in_node(ASTNode* node) {
                                 }
                             } else if (t->type == AST_CONST) {
                                 if (t->data.assign.is_public) {
+                                    new_statements[idx++] = t;
+                                    s->data.program.statements[jj] = NULL;
+                                }
+                            } else if (t->type == AST_STRUCT_DEF) {
+                                if (t->data.struct_def.is_public) {
                                     new_statements[idx++] = t;
                                     s->data.program.statements[jj] = NULL;
                                 }

@@ -1,4 +1,4 @@
 extern "C"
 {
-    //todo
+    //todo:the llvm c api extern in vix
 }
