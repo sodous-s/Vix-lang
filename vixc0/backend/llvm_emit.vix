@@ -1,0 +1,327 @@
+extern "C"
+{
+	fn printf(format: ptr, ...) -> i32
+	fn fopen(path: ptr, mode: ptr) -> ptr
+	fn fclose(file: ptr) -> i32
+	fn fseek(file: ptr, offset: i64, whence: i32) -> i32
+	fn ftell(file: ptr) -> i64
+	fn fread(buffer: ptr, size: i64, count: i64, file: ptr) -> i64
+	fn fputs(s: ptr, file: ptr) -> i32
+	fn malloc(size: i64) -> ptr
+	fn free(p: ptr) -> i32
+	fn LLVMModuleCreateWithName(module_id: ptr) -> ptr
+	fn atoi(s: ptr) -> i32
+	fn LLVMInt32Type() -> ptr
+	fn LLVMFunctionType(ret_type: ptr, param_types: ptr, param_count: i32, is_var_arg: i32) -> ptr
+	fn LLVMAddFunction(module_ref: ptr, name: ptr, func_type: ptr) -> ptr
+	fn LLVMAppendBasicBlock(func: ptr, name: ptr) -> ptr
+	fn LLVMCreateBuilder() -> ptr
+	fn LLVMPositionBuilderAtEnd(builder: ptr, block: ptr) -> i32
+	fn LLVMConstInt(int_ty: ptr, value: i64, sign_extend: i32) -> ptr
+	fn LLVMBuildRet(builder: ptr, val: ptr) -> ptr
+	fn LLVMPrintModuleToString(module_ref: ptr) -> ptr
+	fn LLVMDisposeMessage(message: ptr) -> i32
+	fn LLVMDisposeBuilder(builder: ptr) -> i32
+	fn LLVMDisposeModule(module_ref: ptr) -> i32
+}
+
+pub fn is_alpha_char(ch) -> i32
+{
+	if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or ch == '_')
+	{
+		return 1
+	}
+	return 0
+}
+
+pub fn is_digit_char(ch) -> i32
+{
+	if (ch >= '0' and ch <= '9')
+	{
+		return 1
+	}
+	return 0
+}
+
+pub fn is_ident_char2(ch) -> i32
+{
+	if (is_alpha_char(ch) == 1 or is_digit_char(ch) == 1)
+	{
+		return 1
+	}
+	return 0
+}
+
+pub fn skip_ws_bytes(src: ptr, pos0: i32, total0: i32) -> i32
+{
+	let pos1 = pos0
+	while (pos1 < total0 and (src[pos1] == ' ' or src[pos1] == '\n' or src[pos1] == '\t' or src[pos1] == '\r'))
+	{
+		pos1 += 1
+	}
+	return pos1
+}
+
+pub fn parse_kw_fn_bytes(src: ptr, pos2: i32, total1: i32) -> i32
+{
+	if (pos2 + 1 >= total1)
+	{
+		return -1
+	}
+	if (src[pos2] == 'f' and src[pos2 + 1] == 'n')
+	{
+		if (pos2 + 2 < total1 and is_ident_char2(src[pos2 + 2]) == 1)
+		{
+			return -1
+		}
+		return pos2 + 2
+	}
+	return -1
+}
+
+pub fn parse_kw_return_bytes(src: ptr, pos3: i32, total2: i32) -> i32
+{
+	if (pos3 + 5 >= total2)
+	{
+		return -1
+	}
+	if (src[pos3] == 'r' and src[pos3 + 1] == 'e' and src[pos3 + 2] == 't' and src[pos3 + 3] == 'u' and src[pos3 + 4] == 'r' and src[pos3 + 5] == 'n')
+	{
+		if (pos3 + 6 < total2 and is_ident_char2(src[pos3 + 6]) == 1)
+		{
+			return -1
+		}
+		return pos3 + 6
+	}
+	return -1
+}
+
+pub fn parse_ident_bytes(src: ptr, pos4: i32, total3: i32) -> i32
+{
+	if (pos4 >= total3 or is_alpha_char(src[pos4]) == 0)
+	{
+		return -1
+	}
+	let pos5 = pos4
+	while (pos5 < total3 and is_ident_char2(src[pos5]) == 1)
+	{
+		pos5 += 1
+	}
+	return pos5
+}
+
+pub fn parse_number_bytes(src: ptr, pos6: i32, total4: i32) -> i32
+{
+	if (pos6 >= total4 or is_digit_char(src[pos6]) == 0)
+	{
+		return -1
+	}
+	let pos7 = pos6
+	while (pos7 < total4 and is_digit_char(src[pos7]) == 1)
+	{
+		pos7 += 1
+	}
+	return pos7
+}
+
+pub fn copy_slice_cstr(src: ptr, start0: i32, end0: i32) -> ptr
+{
+	let len0 = end0 - start0
+	let out0 = malloc(len0 + 1)
+	if (out0 == nil)
+	{
+		return nil
+	}
+	let idx0 = 0
+	while (idx0 < len0)
+	{
+		out0[idx0] = src[start0 + idx0]
+		idx0 += 1
+	}
+	out0[len0] = 0
+	return out0
+}
+
+pub fn read_vix_file(path: ptr, mut out_len: & i32) -> ptr
+{
+	let fp0 = fopen(path, "rb")
+	if (fp0 == nil)
+	{
+		printf("EmitError: cannot open source file: %s\n", path)
+		return nil
+	}
+	fseek(fp0, 0, 2)
+	let file_size0 = ftell(fp0)
+	fseek(fp0, 0, 0)
+	if (file_size0 < 0)
+	{
+		fclose(fp0)
+		printf("EmitError: ftell failed\n")
+		return nil
+	}
+	let buf0 = malloc(file_size0 + 1)
+	if (buf0 == nil)
+	{
+		fclose(fp0)
+		printf("EmitError: malloc failed\n")
+		return nil
+	}
+	let read_count0 = fread(buf0, 1, file_size0, fp0)
+	fclose(fp0)
+	buf0[read_count0] = 0
+	@out_len = read_count0
+	return buf0
+}
+
+pub fn write_text_file(path: ptr, content: ptr) -> i32
+{
+	let fp1 = fopen(path, "w")
+	if (fp1 == nil)
+	{
+		printf("EmitError: cannot open output file: %s\n", path)
+		return 1
+	}
+	fputs(content, fp1)
+	fclose(fp1)
+	return 0
+}
+
+pub fn emit(src: ptr, src_len: i32, out_ll_path: ptr) -> i32
+{
+	let pos10 = 0
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	pos10 = parse_kw_fn_bytes(src, pos10, src_len)
+	if (pos10 < 0)
+	{
+		printf("EmitError: expected 'fn'\n")
+		return 1
+	}
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	let name_start0 = pos10
+	let name_end0 = parse_ident_bytes(src, pos10, src_len)
+	if (name_end0 < 0)
+	{
+		printf("EmitError: expected function name\n")
+		return 1
+	}
+	pos10 = name_end0
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	if (pos10 >= src_len or src[pos10] != '(')
+	{
+		printf("EmitError: expected '('\n")
+		return 1
+	}
+	pos10 += 1
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)// 为了简便，我们目前只支持空的参数列表
+	if (pos10 >= src_len or src[pos10] != ')')
+	{
+		printf("EmitError: only empty parameter list is supported currently\n")
+		return 1
+	}
+	pos10 += 1
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	if (pos10 + 1 >= src_len or src[pos10] != '-' or src[pos10 + 1] != '>')
+	{
+		printf("EmitError: expected '->'\n")
+		return 1
+	}
+	pos10 += 2
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	if (pos10 + 2 >= src_len or src[pos10] != 'i' or src[pos10 + 1] != '3' or src[pos10 + 2] != '2')
+	{
+		printf("EmitError: only i32 return type is supported currently\n")
+		return 1
+	}
+	pos10 += 3
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	if (pos10 >= src_len or src[pos10] != '{')
+	{
+		printf("EmitError: expected '{'\n")
+		return 1
+	}
+	pos10 += 1
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	pos10 = parse_kw_return_bytes(src, pos10, src_len)
+	if (pos10 < 0)
+	{
+		printf("EmitError: expected 'return'\n")
+		return 1
+	}
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	let value_start0 = pos10
+	let value_end0 = parse_number_bytes(src, pos10, src_len)
+	if (value_end0 < 0)
+	{
+		printf("EmitError: expected integer literal after return\n")
+		return 1
+	}
+	pos10 = value_end0
+
+	let value_text0 = copy_slice_cstr(src, value_start0, value_end0)
+	if (value_text0 == nil)
+	{
+		printf("EmitError: return value allocation failed\n")
+		return 1
+	}
+	let return_value0 = atoi(value_text0)
+	free(value_text0)
+
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	if (pos10 >= src_len or src[pos10] != '}')
+	{
+		printf("EmitError: expected '}'\n")
+		return 1
+	}
+	pos10 += 1
+	pos10 = skip_ws_bytes(src, pos10, src_len)
+	if (pos10 != src_len)
+	{
+		printf("EmitError: trailing tokens\n")
+		return 1
+	}
+
+	let fn_name0 = copy_slice_cstr(src, name_start0, name_end0)
+	if (fn_name0 == nil)
+	{
+		printf("EmitError: function name alloc failed\n")
+		return 1
+	}
+
+	let module0 = LLVMModuleCreateWithName("VixModule")
+	let i32_ty0 = LLVMInt32Type()
+	let fn_ty0 = LLVMFunctionType(i32_ty0, nil, 0, 0)
+	let fn0 = LLVMAddFunction(module0, fn_name0, fn_ty0)
+	let bb0 = LLVMAppendBasicBlock(fn0, "entry")
+	let builder0 = LLVMCreateBuilder()
+	LLVMPositionBuilderAtEnd(builder0, bb0)
+	let const_ret0 = LLVMConstInt(i32_ty0, return_value0, 1)
+	LLVMBuildRet(builder0, const_ret0)
+	let ir_text0 = LLVMPrintModuleToString(module0)
+	let write_res0 = write_text_file(out_ll_path, ir_text0)
+	if (write_res0 == 0) {
+		printf("EmitOK!: gen llvm ir to %s\n", out_ll_path)
+	}
+	LLVMDisposeMessage(ir_text0)
+	LLVMDisposeBuilder(builder0)
+	LLVMDisposeModule(module0)
+	free(fn_name0)
+	return write_res0
+}
+pub fn compile(input_path: ptr, output_path: ptr) -> i32
+{
+	let source_len0 = 0
+	let source_buf0 = read_vix_file(input_path, & source_len0)
+	if (source_buf0 == nil) {
+		return 1
+	}
+	let result0 = emit(source_buf0, source_len0, output_path)
+	free(source_buf0)
+	return result0
+}
