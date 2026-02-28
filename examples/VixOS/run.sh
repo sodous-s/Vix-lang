@@ -7,8 +7,9 @@ KERNEL="kernel.vix"
 OBJ="kernel.o"
 ELF="kernel.elf"
 ISO="vixos.iso"
-./vixc "$KERNEL" -obj kernel --target="$TARGET"
+vixc "$KERNEL" -obj kernel --target="$TARGET"
 ld.lld -m elf_i386 -T linker.ld "$OBJ" -o "$ELF"
 cp "$ELF" iso/boot/kernel.elf
 grub-mkrescue -o "$ISO" iso
 qemu-system-i386 -cdrom "$ISO"
+rm -f "$OBJ" "$ELF" kernel.ll 

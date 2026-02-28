@@ -1,0 +1,15 @@
+struct  Person {
+    name: string,
+    age: i32
+}
+struct  Woman {
+    person: Person
+    age: i32
+}
+let p1 =  Person {
+    name: "Mike", age: 20
+}
+let emp =  Woman {
+    person: p1, age: 30
+}
+print(emp.person.name)

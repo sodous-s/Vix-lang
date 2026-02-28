@@ -1,0 +1,7 @@
+let a = ["zig", "rust", "vix"]
+let n = 3
+let i = 0
+while (i <  n) {
+    print(i + 1, ".", a[i])
+    i += 1
+}

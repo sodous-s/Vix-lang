@@ -27,7 +27,6 @@ const multiboot_header: multiboot2_header = multiboot2_header{
     tag_flags: 0,
     tag_size: 8
 }
-
 const VGA_BUFFER = 0xB8000
 const VGA_WIDTH = 80
 const VGA_HEIGHT = 25
@@ -47,7 +46,7 @@ fn write_string(strs: ptr) {
 
 #[export]
 fn kernel_main() {
-    write_string("Hello VixOS!")
+    write_string("Welcome to VixOS!")
     while (1) {}
 }
 
