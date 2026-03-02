@@ -1,4 +1,5 @@
 import "lexer.vix"
+import "ast.vix"
 
 extern "C"
 {
@@ -8,9 +9,36 @@ extern "C"
 pub fn skip_ws(src: string, i: i32, n: i32) -> i32
 {
 	let p = i
-	while (p < n and (src[p] == ' ' or src[p] == '\n' or src[p] == '\t' or src[p] == '\r'))
+	while (p < n)
 	{
-		p += 1
+		if (src[p] == ' ' or src[p] == '\n' or src[p] == '\t' or src[p] == '\r')
+		{
+			p += 1
+		}
+		elif (src[p] == '/' and p + 1 < n and src[p + 1] == '/')
+		{
+			p += 2
+			while (p < n and src[p] != '\n' and src[p] != 0)
+			{
+				p += 1
+			}
+		}
+		elif (src[p] == '/' and p + 1 < n and src[p + 1] == '*')
+		{
+			p += 2
+			while (p + 1 < n and (src[p] != '*' or src[p + 1] != '/'))
+			{
+				p += 1
+			}
+			if (p + 1 < n)
+			{
+				p += 2
+			}
+		}
+		else
+		{
+			break
+		}
 	}
 	return p
 }
@@ -138,111 +166,159 @@ pub fn parse_number(src: string, i: i32, n: i32) -> i32
 	return p
 }
 
+pub fn parse_string(src: string, i: i32, n: i32) -> i32
+{
+	if (i >= n or src[i] != '"')
+	{
+		return -1
+	}
+	let p = i + 1
+	while (p < n and src[p] != '"')
+	{
+		if (src[p] == '\\' and p + 1 < n)
+		{
+			p += 2
+		}
+		else
+		{
+			p += 1
+		}
+	}
+	if (p >= n or src[p] != '"')
+	{
+		return -1
+	}
+	return p + 1
+}
+
+pub fn parse_kw_print(src: string, i: i32, n: i32) -> i32
+{
+	if (i + 4 >= n)
+	{
+		return -1
+	}
+	if (src[i] == 'p' and src[i + 1] == 'r' and src[i + 2] == 'i' and src[i + 3] == 'n' and src[i + 4] == 't')
+	{
+		if (i + 5 < n and isidentchar(src[i + 5]) == 1)
+		{
+			return -1
+		}
+		return i + 5
+	}
+	return -1
+}
+
+pub fn parse_print_stmt(src: string, i: i32, n: i32) -> i32
+{
+	let p = skip_ws(src, i, n)
+	let after_kw = parse_kw_print(src, p, n)
+	if (after_kw < 0)
+	{
+		return -1
+	}
+
+	let cur = skip_ws(src, after_kw, n)
+	let open_p = expect_char(src, cur, n, '(')
+	if (open_p < 0)
+	{
+		printf("ParseError: expected '(' after print\n")
+		return -1
+	}
+
+	cur = skip_ws(src, open_p, n)
+	let expr_start = cur
+	let expr_end = parse_string(src, cur, n)
+	if (expr_end < 0)
+	{
+		expr_end = parse_number(src, cur, n)
+		if (expr_end < 0)
+		{
+			printf("ParseError: expected print argument\n")
+			return -1
+		}
+
+		let next = skip_ws(src, expr_end, n)
+		if (next < n and src[next] == '+')
+		{
+			let rhs_start = skip_ws(src, next + 1, n)
+			let rhs_end = parse_number(src, rhs_start, n)
+			if (rhs_end < 0)
+			{
+				printf("ParseError: expected number after '+'\n")
+				return -1
+			}
+			expr_end = rhs_end
+		}
+	}
+	span("PRINT_ARG", src, expr_start, expr_end)
+
+	cur = skip_ws(src, expr_end, n)
+	let close_p = expect_char(src, cur, n, ')')
+	if (close_p < 0)
+	{
+		printf("ParseError: expected ')' after print arg\n")
+		return -1
+	}
+	return close_p
+}
+
+
+pub fn parser_with_len(src: string, n: i32) -> i32
+{
+	let fn_start0 = 0
+	let fn_end0 = 0
+	let body_start0 = 0
+	let body_end0 = 0
+	let ret_value0 = 0
+
+	if (ast_build_function(src, n, & fn_start0, & fn_end0, & body_start0, & body_end0, & ret_value0) != 0)
+	{
+		return 1
+	}
+
+	span("FUNC_NAME", src, fn_start0, fn_end0)
+	printf("RET_ARROW(->)\n")
+	printf("RET_TYPE(i32)\n")
+
+	let scan0 = body_start0
+	while (1)
+	{
+		let kind0 = 0
+		let val0 = 0
+		let s0 = 0
+		let s1 = 0
+		let lhs0 = 0
+		let rhs0 = 0
+		let has_add0 = 0
+		let next0 = ast_next_print_node(src, & scan0, body_end0, & kind0, & val0, & s0, & s1, & lhs0, & rhs0, & has_add0)
+		if (next0 == 0)
+		{
+			break
+		}
+		if (next0 < 0)
+		{
+			return 1
+		}
+		if (kind0 == 1)
+		{
+			span("PRINT_ARG", src, s0, s1)
+		}
+		elif (has_add0 == 1)
+		{
+			printf("PRINT_ARG(%d+%d)\n", lhs0, rhs0)
+		}
+		else
+		{
+			printf("PRINT_ARG(%d)\n", val0)
+		}
+	}
+
+	printf("RET_VALUE(%d)\n", ret_value0)
+	printf("Parse OK\n")
+	return 0
+}
 
 pub fn parser(src: string) -> i32
 {
-	let i = 0
-	let n = src.length
-
-	i = skip_ws(src, i, n)
-	i = parse_kw_fn(src, i, n)
-	if (i < 0)
-	{
-		printf("ParseError: expected 'fn'\n")
-		return 1
-	}
-
-	i = skip_ws(src, i, n)
-	let name_start = i
-	i = parse_ident(src, i, n)
-	if (i < 0)
-	{
-		printf("ParseError: expected function ident\n")
-		return 1
-	}
-	span("FUNC_NAME", src, name_start, i)
-
-	i = skip_ws(src, i, n)
-	i = expect_char(src, i, n, '(')
-	if (i < 0)
-	{
-		printf("ParseError: expected '('\n")
-		return 1
-	}
-
-	i = skip_ws(src, i, n)
-	i = parse_param_list(src, i, n)
-	if (i < 0)
-	{
-		return 1
-	}
-	i = skip_ws(src, i, n)
-	i = expect_char(src, i, n, ')')
-	if (i < 0)
-	{
-		printf("ParseError: expected ')'\n")
-		return 1
-	}
-
-	i = skip_ws(src, i, n)
-	if (i + 1 >= n or src[i] != '-' or src[i + 1] != '>')
-	{
-		printf("ParseError: expected '->'\n")
-		return 1
-	}
-	span("RET_ARROW", src, i, i + 2)
-	i += 2
-
-	i = skip_ws(src, i, n)
-	if (i + 2 >= n or src[i] != 'i' or src[i + 1] != '3' or src[i + 2] != '2')
-	{
-		printf("ParseError: expected return type i32\n")
-		return 1
-	}
-	span("RET_TYPE", src, i, i + 3)
-	i += 3
-
-	i = skip_ws(src, i, n)
-	i = expect_char(src, i, n, '{')
-	if (i < 0)
-	{
-		printf("ParseError: expected '{'\n")
-		return 1
-	}
-
-	i = skip_ws(src, i, n)
-	i = parse_kw_return(src, i, n)
-	if (i < 0)
-	{
-		printf("ParseError: expected 'return'\n")
-		return 1
-	}
-
-	i = skip_ws(src, i, n)
-	let num_start = i
-	i = parse_number(src, i, n)
-	if (i < 0)
-	{
-		printf("ParseError: expected int literal after return\n")
-		return 1
-	}
-	span("RET_VALUE", src, num_start, i)
-
-	i = skip_ws(src, i, n)
-	i = expect_char(src, i, n, '}')
-	if (i < 0)
-	{
-		printf("ParseError: expected '}'\n")
-		return 1
-	}
-
-	i = skip_ws(src, i, n)
-	if (i != n)
-	{
-		printf("ParseError: trailing tokens after function body\n")
-		return 1
-	}
-
-	printf("Parse OK\n")
-	return 0
+	return parser_with_len(src, source_text_len(src))
 }

@@ -1,0 +1,23 @@
+extern "C"
+{
+    fn system(cmd: ptr) -> i32
+    fn exit(status: i32) -> void
+    fn opendir(path: ptr) -> ptr
+    fn readdir(dir: ptr) -> ptr
+    fn closedir(dir: ptr) -> i32
+}
+pub fn system(cmd: ptr) -> i32 {
+    return system(cmd)
+}
+pub fn exit(status: i32) -> void {
+    exit(status)
+}
+pub fn opendir(path: ptr) -> ptr {
+    return opendir(path)
+}
+pub fn readdir(dir: ptr) -> ptr {
+    return readdir(dir)
+}
+pub fn closedir(dir: ptr) -> i32 {
+    return closedir(dir)
+}

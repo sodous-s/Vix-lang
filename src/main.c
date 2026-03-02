@@ -561,10 +561,10 @@ int main(int argc, char **argv) {
                              llvm_f, out_f, f_t, ls);
                 } else if (eff_t) {
                     snprintf(ccmd, ccmd_sz,
-                             "clang -O2 %s -o %s -target %s $(llvm-config --ldflags --libs) -lm",
+                             "clang -O2 %s -o %s -target %s $(llvm-config --ldflags --libs all) -lm -lstdc++",
                              llvm_f, out_f, eff_t);
                 } else {
-                    snprintf(ccmd, ccmd_sz, "clang -O2 %s -o %s $(llvm-config --ldflags --libs) -lm", llvm_f, out_f);
+                    snprintf(ccmd, ccmd_sz, "clang -O2 %s -o %s $(llvm-config --ldflags --libs all) -lm -lstdc++", llvm_f, out_f);
                 }
                 
                 int cres = system(ccmd);

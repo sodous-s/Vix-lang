@@ -1,0 +1,28 @@
+extern "C"
+{
+    fn malloc(size: i32) -> ptr
+    fn free(ptr: ptr) ->void
+    fn memcpy(dest: ptr, src: ptr, n: i32) -> ptr
+    fn memset(s: ptr, c: i32, n: i32) -> ptr
+    fn memcmp(s1: ptr, s2: ptr, n: i32) -> i32
+}
+pub fn memcpy(dest: ptr, src: ptr, n: i32) -> ptr
+{
+    return memcpy(dest, src, n)
+}
+pub fn memset(s: ptr, c: i32, n: i32) -> ptr
+{
+    return memset(s, c, n)
+}
+pub fn memcmp(s1: ptr, s2: ptr, n: i32) -> i32
+{
+    return memcmp(s1, s2, n)
+}
+pub fn malloc(size: i32) -> ptr
+{
+    return malloc(size)
+}
+pub fn free(ptr: ptr)
+{
+    free(ptr)
+}

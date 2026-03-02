@@ -1,6 +1,6 @@
 import "lexer.vix"
-import "parser.vix"
 import "ast.vix"
+import "parser.vix"
 import "backend/llvm_emit.vix"
 import "../src/std/strings.vix"
 extern "C"
@@ -10,13 +10,62 @@ extern "C"
 
 fn main(argc: i32, argv: ptr) -> i32
 {
-    if (argc == 4 and strcmp(argv[1], "--emit-ll") == 0)
+    if (argc <= 1)
     {
-        let input_file = argv[2]
-        let output_file = argv[3]
-        return compile(input_file, output_file)
+        printf("Usage: %s --emit-ll <in.vix> <out.ll>\n", argv[0])
+        printf("       %s --debug <in.vix>\n", argv[0])
+        printf("       %s --help\n", argv[0])
+        return 1
+    }
+
+    if (strcmp(argv[1], "--help") == 0)
+    {
+        printf("Usage: %s --emit-ll <in.vix> <out.ll>\n", argv[0])
+        printf("       %s --debug <in.vix>\n", argv[0])
+        printf("       %s --help\n", argv[0])
+        return 0
+    }
+
+    if (strcmp(argv[1], "--debug") == 0)
+    {
+        if (argc != 3)
+        {
+            printf("Usage: %s --debug <in.vix>\n", argv[0])
+            return 1
+        }
+
+        let source_len = 0
+        let source_buf = read_vix_file(argv[2], & source_len)
+        if (source_buf == nil)
+        {
+            return 1
+        }
+
+        printf("=== LEXER ===\n")
+        let lex_res = lexer_with_len(source_buf, source_len)
+        printf("lexer exit code: %d\n", lex_res)
+
+        printf("=== PARSER ===\n")
+        let parse_res = parser_with_len(source_buf, source_len)
+        printf("parser exit code: %d\n", parse_res)
+
+        printf("=== AST ===\n")
+        let ast_res = ast_with_len(source_buf, source_len)
+        printf("ast exit code: %d\n", ast_res)
+        return 0
+    }
+    if (argc == 4)
+    {
+        if (strcmp(argv[1], "--emit-ll") == 0)
+        {
+            let input_file = argv[2]
+            let output_file = argv[3]
+            return compile(input_file, output_file)
+        }
     }
 
     printf("Usage: %s --emit-ll <in.vix> <out.ll>\n", argv[0])
-    return 1
+    printf("       %s --debug <in.vix>\n", argv[0])
+    printf("       %s --help\n", argv[0])
+    return 0
 }

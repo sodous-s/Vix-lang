@@ -251,7 +251,7 @@ static int decode_char_literal(const char* text, size_t len, unsigned char* out)
                         return NUMBER_FLOAT;
                       }
 
-\"([^\"\\]|\\[\"\\nrt0\\'])+\"        {
+\"([^\"\\]|\\[\"\\nrt0\\'])*\"        {
                         int col = GET_FIRST_COLUMN();
                         char* raw_str = my_strndup(yytext + 1, yyleng - 2);
                         yylval.str = process_escape_sequences(raw_str, strlen(raw_str));
