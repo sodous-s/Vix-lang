@@ -313,6 +313,14 @@ statement
     | LET CONST identifier COLON type ASSIGN expression SEMICOLON { $$ = create_const_node_with_yyltype($3, $7, (YYLTYPE*) &@$); }
     | GLOBAL identifier ASSIGN expression SEMICOLON { $$ = create_global_node_with_yyltype($2, NULL, $4, (YYLTYPE*) &@$); }
     | GLOBAL identifier COLON type ASSIGN expression SEMICOLON { $$ = create_global_node_with_yyltype($2, $4, $6, (YYLTYPE*) &@$); }
+    | PUB GLOBAL identifier ASSIGN expression SEMICOLON {
+        $$ = create_global_node_with_yyltype($3, NULL, $5, (YYLTYPE*) &@$);
+        $$->data.global_decl.is_public = 1;
+    }
+    | PUB GLOBAL identifier COLON type ASSIGN expression SEMICOLON {
+        $$ = create_global_node_with_yyltype($3, $5, $7, (YYLTYPE*) &@$);
+        $$->data.global_decl.is_public = 1;
+    }
     | compound_assignment_statement SEMICOLON { $$ = $1; }
     | input_statement SEMICOLON     { $$ = $1; }
     | if_statement                  { $$ = $1; }
@@ -378,6 +386,14 @@ statement
     | LET CONST identifier COLON type ASSIGN expression { $$ = create_const_node_with_yyltype($3, $7, (YYLTYPE*) &@$); }
     | GLOBAL identifier ASSIGN expression { $$ = create_global_node_with_yyltype($2, NULL, $4, (YYLTYPE*) &@$); }
     | GLOBAL identifier COLON type ASSIGN expression { $$ = create_global_node_with_yyltype($2, $4, $6, (YYLTYPE*) &@$); }
+    | PUB GLOBAL identifier ASSIGN expression {
+        $$ = create_global_node_with_yyltype($3, NULL, $5, (YYLTYPE*) &@$);
+        $$->data.global_decl.is_public = 1;
+    }
+    | PUB GLOBAL identifier COLON type ASSIGN expression {
+        $$ = create_global_node_with_yyltype($3, $5, $7, (YYLTYPE*) &@$);
+        $$->data.global_decl.is_public = 1;
+    }
     | identifier COLON expression { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | MUT identifier ASSIGN expression { 
         $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$); 

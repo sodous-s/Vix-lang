@@ -1,0 +1,665 @@
+import "../lexer.vix"
+import "../typeinfer.vix"
+
+extern "C"
+{
+	fn printf(format: ptr, ...) -> i32
+	fn atoi(s: ptr) -> i32
+	fn malloc(size: i64) -> ptr
+	fn free(p: ptr) -> i32
+}
+
+pub struct BasicFuncAst
+{
+	fn_name_start: i32,
+	fn_name_end: i32,
+	body_start: i32,
+	body_end: i32,
+	ret_type_start: i32,
+	ret_type_end: i32,
+	ret_value_start: i32,
+	ret_value_end: i32,
+	param_count: i32
+}
+
+pub struct PrintStmtAst
+{
+	kind: i32,
+	str_start: i32,
+	str_end: i32,
+	int_value: i32,
+	lhs_value: i32,
+	rhs_value: i32,
+	has_add: i32
+}
+
+pub global ast_env_cap = 256
+pub global ast_env_count = 0
+pub global ast_env_name_s = 0
+pub global ast_env_name_e = 0
+pub global ast_env_ty = 0
+pub global ast_env_i32 = 0
+pub global ast_env_str_s = 0
+pub global ast_env_str_e = 0
+
+pub fn ast_env_init() -> i32
+{
+	if (ast_env_name_s == 0)
+	{
+		ast_env_name_s = malloc(ast_env_cap * 4)
+		ast_env_name_e = malloc(ast_env_cap * 4)
+		ast_env_ty = malloc(ast_env_cap * 4)
+		ast_env_i32 = malloc(ast_env_cap * 4)
+		ast_env_str_s = malloc(ast_env_cap * 4)
+		ast_env_str_e = malloc(ast_env_cap * 4)
+		if (ast_env_name_s == 0 or ast_env_name_e == 0 or ast_env_ty == 0 or ast_env_i32 == 0 or ast_env_str_s == 0 or ast_env_str_e == 0)
+		{
+			printf("AstError: symbol table alloc failed\n")
+			return 1
+		}
+	}
+	ast_env_count = 0
+	return 0
+}
+
+pub fn ast_env_find(src: string, name_s: i32, name_e: i32) -> i32
+{
+	let i0 = 0
+	let s1 = 0
+	let e1 = 0
+	let j0 = 0
+	let n0 = 0
+	let ok0 = 0
+	while (i0 < ast_env_count)
+	{
+		s1 = ast_env_name_s[i0]
+		e1 = ast_env_name_e[i0]
+		if (name_e - name_s == e1 - s1)
+		{
+			j0 = 0
+			n0 = name_e - name_s
+			ok0 = 1
+			while (j0 < n0)
+			{
+				if (src[name_s + j0] != src[s1 + j0])
+				{
+					ok0 = 0
+				}
+				j0 += 1
+			}
+			if (ok0 == 1)
+			{
+				return i0
+			}
+		}
+		i0 += 1
+	}
+	return -1
+}
+
+pub fn ast_env_set(src: string, name_s: i32, name_e: i32, ty: i32, i32v: i32, str_s: i32, str_e: i32) -> i32
+{
+	let idx0 = ast_env_find(src, name_s, name_e)
+	if (idx0 < 0)
+	{
+		if (ast_env_count >= ast_env_cap)
+		{
+			printf("AstError: too many variables\n")
+			return 1
+		}
+		idx0 = ast_env_count
+		ast_env_count += 1
+	}
+	ast_env_name_s[idx0] = name_s
+	ast_env_name_e[idx0] = name_e
+	ast_env_ty[idx0] = ty
+	ast_env_i32[idx0] = i32v
+	ast_env_str_s[idx0] = str_s
+	ast_env_str_e[idx0] = str_e
+	return 0
+}
+
+pub fn ast_skip_ws(src: string, pos0: i32, total0: i32) -> i32
+{
+	let pos1 = pos0
+	while (pos1 < total0)
+	{
+		if (src[pos1] == ' ' or src[pos1] == '\n' or src[pos1] == '\t' or src[pos1] == '\r')
+		{
+			pos1 += 1
+		}
+		elif (src[pos1] == '/' and pos1 + 1 < total0 and src[pos1 + 1] == '/')
+		{
+			pos1 += 2
+			while (pos1 < total0 and src[pos1] != '\n' and src[pos1] != 0)
+			{
+				pos1 += 1
+			}
+		}
+		elif (src[pos1] == '/' and pos1 + 1 < total0 and src[pos1 + 1] == '*')
+		{
+			pos1 += 2
+			while (pos1 + 1 < total0 and (src[pos1] != '*' or src[pos1 + 1] != '/'))
+			{
+				pos1 += 1
+			}
+			if (pos1 + 1 < total0)
+			{
+				pos1 += 2
+			}
+		}
+		else
+		{
+			break
+		}
+	}
+	return pos1
+}
+
+pub fn ast_parse_kw_fn(src: string, pos2: i32, total1: i32) -> i32
+{
+	if (pos2 + 1 >= total1)
+	{
+		return -1
+	}
+	if (src[pos2] == 'f' and src[pos2 + 1] == 'n')
+	{
+		if (pos2 + 2 < total1 and isidentchar(src[pos2 + 2]) == 1)
+		{
+			return -1
+		}
+		return pos2 + 2
+	}
+	return -1
+}
+
+pub fn ast_parse_kw_return(src: string, pos3: i32, total2: i32) -> i32
+{
+	if (pos3 + 5 >= total2)
+	{
+		return -1
+	}
+	if (src[pos3] == 'r' and src[pos3 + 1] == 'e' and src[pos3 + 2] == 't' and src[pos3 + 3] == 'u' and src[pos3 + 4] == 'r' and src[pos3 + 5] == 'n')
+	{
+		if (pos3 + 6 < total2 and isidentchar(src[pos3 + 6]) == 1)
+		{
+			return -1
+		}
+		return pos3 + 6
+	}
+	return -1
+}
+
+pub fn ast_parse_kw_print(src: string, pos3: i32, total2: i32) -> i32
+{
+	if (pos3 + 4 >= total2)
+	{
+		return -1
+	}
+	if (src[pos3] == 'p' and src[pos3 + 1] == 'r' and src[pos3 + 2] == 'i' and src[pos3 + 3] == 'n' and src[pos3 + 4] == 't')
+	{
+		if (pos3 + 5 < total2 and isidentchar(src[pos3 + 5]) == 1)
+		{
+			return -1
+		}
+		return pos3 + 5
+	}
+	return -1
+}
+
+pub fn ast_parse_kw_let(src: string, pos3: i32, total2: i32) -> i32
+{
+	if (pos3 + 2 >= total2)
+	{
+		return -1
+	}
+	if (src[pos3] == 'l' and src[pos3 + 1] == 'e' and src[pos3 + 2] == 't')
+	{
+		if (pos3 + 3 < total2 and isidentchar(src[pos3 + 3]) == 1)
+		{
+			return -1
+		}
+		return pos3 + 3
+	}
+	return -1
+}
+
+pub fn ast_parse_ident(src: string, pos4: i32, total3: i32) -> i32
+{
+	if (pos4 >= total3 or isalpha(src[pos4]) == 0)
+	{
+		return -1
+	}
+	let pos5 = pos4
+	while (pos5 < total3 and isidentchar(src[pos5]) == 1)
+	{
+		pos5 += 1
+	}
+	return pos5
+}
+
+pub fn ast_parse_number(src: string, pos6: i32, total4: i32) -> i32
+{
+	if (pos6 >= total4 or isdigit(src[pos6]) == 0)
+	{
+		return -1
+	}
+	let pos7 = pos6
+	while (pos7 < total4 and isdigit(src[pos7]) == 1)
+	{
+		pos7 += 1
+	}
+	return pos7
+}
+
+pub fn ast_parse_numeric(src: string, pos6: i32, total4: i32) -> i32
+{
+	if (pos6 >= total4 or isdigit(src[pos6]) == 0)
+	{
+		return -1
+	}
+	let pos7 = pos6
+	while (pos7 < total4 and isdigit(src[pos7]) == 1)
+	{
+		pos7 += 1
+	}
+	if (pos7 < total4 and src[pos7] == '.' and pos7 + 1 < total4 and isdigit(src[pos7 + 1]) == 1)
+	{
+		pos7 += 1
+		while (pos7 < total4 and isdigit(src[pos7]) == 1)
+		{
+			pos7 += 1
+		}
+	}
+	return pos7
+}
+
+pub fn ast_parse_string(src: string, pos6: i32, total4: i32) -> i32
+{
+	if (pos6 >= total4 or src[pos6] != '"')
+	{
+		return -1
+	}
+	let pos7 = pos6 + 1
+	while (pos7 < total4 and src[pos7] != '"')
+	{
+		if (src[pos7] == '\\' and pos7 + 1 < total4)
+		{
+			pos7 += 2
+		}
+		else
+		{
+			pos7 += 1
+		}
+	}
+	if (pos7 >= total4 or src[pos7] != '"')
+	{
+		return -1
+	}
+	return pos7 + 1
+}
+
+pub fn ast_parse_number_value(src: string, start0: i32, end0: i32) -> i32
+{
+	let len0 = end0 - start0
+	let out0 = malloc(len0 + 1)
+	if (out0 == nil)
+	{
+		return 0
+	}
+	let i0 = 0
+	while (i0 < len0)
+	{
+		out0[i0] = src[start0 + i0]
+		i0 += 1
+	}
+	out0[len0] = 0
+	let v0 = atoi(out0)
+	free(out0)
+	return v0
+}
+
+pub fn ast_parse_expr_basic(src: string, pos0: i32, total0: i32, mut out_ty: & i32, mut out_i32: & i32, mut out_s0: & i32, mut out_s1: & i32, mut out_end: & i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let s_end0 = ast_parse_string(src, p0, total0)
+	if (s_end0 >= 0)
+	{
+		@out_ty = TY_STRING
+		@out_i32 = 0
+		@out_s0 = p0
+		@out_s1 = s_end0
+		@out_end = s_end0
+		return 0
+	}
+
+	let n_end0 = ast_parse_numeric(src, p0, total0)
+	if (n_end0 >= 0)
+	{
+		let n_ty0 = ti_infer_literal(src, p0, n_end0, TY_I32)
+		@out_ty = n_ty0
+		if (n_ty0 == TY_I32)
+		{
+			@out_i32 = ast_parse_number_value(src, p0, n_end0)
+		}
+		else
+		{
+			@out_i32 = 0
+		}
+		@out_s0 = 0
+		@out_s1 = 0
+		@out_end = n_end0
+		return 0
+	}
+
+	let id_end0 = ast_parse_ident(src, p0, total0)
+	if (id_end0 >= 0)
+	{
+		if (ti_is_true(src, p0, id_end0) == 1)
+		{
+			@out_ty = TY_BOOL
+			@out_i32 = 1
+			@out_s0 = 0
+			@out_s1 = 0
+			@out_end = id_end0
+			return 0
+		}
+		if (ti_is_false(src, p0, id_end0) == 1)
+		{
+			@out_ty = TY_BOOL
+			@out_i32 = 0
+			@out_s0 = 0
+			@out_s1 = 0
+			@out_end = id_end0
+			return 0
+		}
+		let idx0 = ast_env_find(src, p0, id_end0)
+		if (idx0 < 0)
+		{
+			@out_ty = TY_UNKNOWN
+			@out_i32 = 0
+			@out_s0 = 0
+			@out_s1 = 0
+			@out_end = id_end0
+			return 0
+		}
+		@out_ty = ast_env_ty[idx0]
+		@out_i32 = ast_env_i32[idx0]
+		@out_s0 = ast_env_str_s[idx0]
+		@out_s1 = ast_env_str_e[idx0]
+		@out_end = id_end0
+		return 0
+	}
+
+	return 1
+}
+
+pub fn ast_parse_let_stmt_node(src: string, pos0: i32, total0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let p1 = ast_parse_kw_let(src, p0, total0)
+	if (p1 < 0)
+	{
+		return -1
+	}
+
+	let name_s = ast_skip_ws(src, p1, total0)
+	let name_e = ast_parse_ident(src, name_s, total0)
+	if (name_e < 0)
+	{
+		printf("AstError: expected variable name\n")
+		return -1
+	}
+
+	let p2 = ast_skip_ws(src, name_e, total0)
+	if (p2 >= total0 or src[p2] != '=')
+	{
+		printf("AstError: expected '=' in let\n")
+		return -1
+	}
+	let p3 = ast_skip_ws(src, p2 + 1, total0)
+
+	let lhs_ty = TY_UNKNOWN
+	let lhs_i32 = 0
+	let lhs_s0 = 0
+	let lhs_s1 = 0
+	let lhs_end = 0
+	if (ast_parse_expr_basic(src, p3, total0, & lhs_ty, & lhs_i32, & lhs_s0, & lhs_s1, & lhs_end) != 0)
+	{
+		printf("AstError: invalid let expression\n")
+		return -1
+	}
+
+	let p4 = ast_skip_ws(src, lhs_end, total0)
+	let ty0 = lhs_ty
+	let iv0 = lhs_i32
+	let ss0 = lhs_s0
+	let se0 = lhs_s1
+
+	if (p4 < total0 and (src[p4] == '+' or src[p4] == '*'))
+	{
+		let op0 = src[p4]
+		let rhs_ty = TY_UNKNOWN
+		let rhs_i32 = 0
+		let rhs_s0 = 0
+		let rhs_s1 = 0
+		let rhs_end = 0
+		if (ast_parse_expr_basic(src, p4 + 1, total0, & rhs_ty, & rhs_i32, & rhs_s0, & rhs_s1, & rhs_end) != 0)
+		{
+			printf("AstError: invalid binary rhs\n")
+			return -1
+		}
+		ty0 = ti_infer_binary(lhs_ty, rhs_ty, op0)
+		if (ty0 == TY_I32)
+		{
+			if (op0 == '+')
+			{
+				iv0 = lhs_i32 + rhs_i32
+			}
+			else
+			{
+				iv0 = lhs_i32 * rhs_i32
+			}
+		}
+		else
+		{
+			iv0 = 0
+		}
+		ss0 = 0
+		se0 = 0
+		p4 = ast_skip_ws(src, rhs_end, total0)
+	}
+
+	if (ast_env_set(src, name_s, name_e, ty0, iv0, ss0, se0) != 0)
+	{
+		return -1
+	}
+	return p4
+}
+
+pub fn ast_parse_print_stmt_node(src: string, pos8: i32, total5: i32, mut out_kind: & i32, mut out_i32: & i32, mut out_s0: & i32, mut out_s1: & i32, mut out_lhs: & i32, mut out_rhs: & i32, mut out_has_add: & i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos8, total5)
+	let p1 = ast_parse_kw_print(src, p0, total5)
+	if (p1 < 0)
+	{
+		return -1
+	}
+
+	let p2 = ast_skip_ws(src, p1, total5)
+	if (p2 >= total5 or src[p2] != '(')
+	{
+		printf("AstError: expected '(' after print\n")
+		return -1
+	}
+
+	let cur0 = ast_skip_ws(src, p2 + 1, total5)
+	let c0 = 0
+	let c1 = 0
+	let s_end0 = ast_parse_string(src, cur0, total5)
+	if (s_end0 >= 0)
+	{
+		@out_kind = 1
+		@out_i32 = 0
+		@out_s0 = cur0
+		@out_s1 = s_end0
+		@out_lhs = 0
+		@out_rhs = 0
+		@out_has_add = 0
+		c0 = ast_skip_ws(src, s_end0, total5)
+		if (c0 >= total5 or src[c0] != ')')
+		{
+			printf("AstError: expected ')' after print arg\n")
+			return -1
+		}
+		return c0 + 1
+	}
+
+	let n1s0 = cur0
+	let n1e0 = ast_parse_number(src, cur0, total5)
+	if (n1e0 < 0)
+	{
+		let id_end0 = ast_parse_ident(src, cur0, total5)
+		if (id_end0 < 0)
+		{
+			printf("AstError: expected print argument\n")
+			return -1
+		}
+		let idx0 = ast_env_find(src, cur0, id_end0)
+		if (idx0 < 0)
+		{
+			printf("AstError: unknown variable in print\n")
+			return -1
+		}
+		if (ast_env_ty[idx0] == TY_STRING)
+		{
+			@out_kind = 1
+			@out_i32 = 0
+			@out_s0 = ast_env_str_s[idx0]
+			@out_s1 = ast_env_str_e[idx0]
+			@out_lhs = 0
+			@out_rhs = 0
+			@out_has_add = 0
+			c0 = ast_skip_ws(src, id_end0, total5)
+			if (c0 >= total5 or src[c0] != ')')
+			{
+				printf("AstError: expected ')' after print arg\n")
+				return -1
+			}
+			return c0 + 1
+		}
+		if (ast_env_ty[idx0] == TY_I32)
+		{
+			@out_kind = 2
+			@out_i32 = ast_env_i32[idx0]
+			@out_s0 = 0
+			@out_s1 = 0
+			@out_lhs = ast_env_i32[idx0]
+			@out_rhs = 0
+			@out_has_add = 0
+			c1 = ast_skip_ws(src, id_end0, total5)
+			if (c1 >= total5 or src[c1] != ')')
+			{
+				printf("AstError: expected ')' after print arg\n")
+				return -1
+			}
+			return c1 + 1
+		}
+		printf("AstError: unsupported variable type in print\n")
+		return -1
+	}
+	let lhs0 = ast_parse_number_value(src, n1s0, n1e0)
+	let next0 = ast_skip_ws(src, n1e0, total5)
+
+	if (next0 < total5 and src[next0] == '+')
+	{
+		let n2s0 = ast_skip_ws(src, next0 + 1, total5)
+		let n2e0 = ast_parse_number(src, n2s0, total5)
+		if (n2e0 < 0)
+		{
+			printf("AstError: expected number after '+'\n")
+			return -1
+		}
+		let rhs0 = ast_parse_number_value(src, n2s0, n2e0)
+		@out_kind = 2
+		@out_i32 = lhs0 + rhs0
+		@out_s0 = 0
+		@out_s1 = 0
+		@out_lhs = lhs0
+		@out_rhs = rhs0
+		@out_has_add = 1
+		c1 = ast_skip_ws(src, n2e0, total5)
+		if (c1 >= total5 or src[c1] != ')')
+		{
+			printf("AstError: expected ')' after print arg\n")
+			return -1
+		}
+		return c1 + 1
+	}
+
+	@out_kind = 2
+	@out_i32 = lhs0
+	@out_s0 = 0
+	@out_s1 = 0
+	@out_lhs = lhs0
+	@out_rhs = 0
+	@out_has_add = 0
+	let c2 = ast_skip_ws(src, n1e0, total5)
+	if (c2 >= total5 or src[c2] != ')')
+	{
+		printf("AstError: expected ')' after print arg\n")
+		return -1
+	}
+	return c2 + 1
+}
+
+pub fn ast_parse_params_core(src: string, pos8: i32, total5: i32, mut out_count: & i32) -> i32
+{
+	let pos9 = ast_skip_ws(src, pos8, total5)
+	if (pos9 < total5 and src[pos9] == ')')
+	{
+		@out_count = 0
+		return pos9
+	}
+
+	let cnt0 = 0
+	let cur0 = pos9
+	while (1)
+	{
+		cur0 = ast_skip_ws(src, cur0, total5)
+		let pname_end0 = ast_parse_ident(src, cur0, total5)
+		if (pname_end0 < 0)
+		{
+			printf("AstError: expected parameter name\n")
+			return -1
+		}
+
+		let after_name0 = ast_skip_ws(src, pname_end0, total5)
+		if (after_name0 >= total5 or src[after_name0] != ':')
+		{
+			printf("AstError: expected ':' after parameter name\n")
+			return -1
+		}
+
+		let ptype_start0 = ast_skip_ws(src, after_name0 + 1, total5)
+		let ptype_end0 = ast_parse_ident(src, ptype_start0, total5)
+		if (ptype_end0 < 0)
+		{
+			printf("AstError: expected parameter type\n")
+			return -1
+		}
+
+		cnt0 += 1
+		let next0 = ast_skip_ws(src, ptype_end0, total5)
+		if (next0 < total5 and src[next0] == ',')
+		{
+			cur0 = next0 + 1
+			continue
+		}
+		cur0 = next0
+		break
+	}
+
+	@out_count = cnt0
+	return cur0
+}

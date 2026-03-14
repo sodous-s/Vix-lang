@@ -1,5 +1,5 @@
 import "lexer.vix"
-import "ast.vix"
+import "ast_pretty.vix"
 
 extern "C"
 {
@@ -265,55 +265,10 @@ pub fn parse_print_stmt(src: string, i: i32, n: i32) -> i32
 
 pub fn parser_with_len(src: string, n: i32) -> i32
 {
-	let fn_start0 = 0
-	let fn_end0 = 0
-	let body_start0 = 0
-	let body_end0 = 0
-	let ret_value0 = 0
-
-	if (ast_build_function(src, n, & fn_start0, & fn_end0, & body_start0, & body_end0, & ret_value0) != 0)
+	if (ast_dump_pretty_with_len(src, n) != 0)
 	{
 		return 1
 	}
-
-	span("FUNC_NAME", src, fn_start0, fn_end0)
-	printf("RET_ARROW(->)\n")
-	printf("RET_TYPE(i32)\n")
-
-	let scan0 = body_start0
-	while (1)
-	{
-		let kind0 = 0
-		let val0 = 0
-		let s0 = 0
-		let s1 = 0
-		let lhs0 = 0
-		let rhs0 = 0
-		let has_add0 = 0
-		let next0 = ast_next_print_node(src, & scan0, body_end0, & kind0, & val0, & s0, & s1, & lhs0, & rhs0, & has_add0)
-		if (next0 == 0)
-		{
-			break
-		}
-		if (next0 < 0)
-		{
-			return 1
-		}
-		if (kind0 == 1)
-		{
-			span("PRINT_ARG", src, s0, s1)
-		}
-		elif (has_add0 == 1)
-		{
-			printf("PRINT_ARG(%d+%d)\n", lhs0, rhs0)
-		}
-		else
-		{
-			printf("PRINT_ARG(%d)\n", val0)
-		}
-	}
-
-	printf("RET_VALUE(%d)\n", ret_value0)
 	printf("Parse OK\n")
 	return 0
 }

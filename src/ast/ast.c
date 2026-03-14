@@ -10,6 +10,104 @@ extern FILE* yyin;
 extern ASTNode* root; //tips : 根节点
 extern const char* current_input_filename;
 extern int yyparse(void);
+extern int yylineno;
+
+static void set_source_file_recursive(ASTNode* node, const char* source_file) {
+    if (!node) return;
+    node->source_file = source_file;
+
+    switch (node->type) {
+        case AST_PROGRAM:
+            for (int i = 0; i < node->data.program.statement_count; i++) {
+                set_source_file_recursive(node->data.program.statements[i], source_file);
+            }
+            break;
+        case AST_PRINT:
+            set_source_file_recursive(node->data.print.expr, source_file);
+            break;
+        case AST_INPUT:
+            set_source_file_recursive(node->data.input.prompt, source_file);
+            break;
+        case AST_TOINT:
+            set_source_file_recursive(node->data.toint.expr, source_file);
+            break;
+        case AST_TOFLOAT:
+            set_source_file_recursive(node->data.tofloat.expr, source_file);
+            break;
+        case AST_EXPRESSION_LIST:
+            for (int i = 0; i < node->data.expression_list.expression_count; i++) {
+                set_source_file_recursive(node->data.expression_list.expressions[i], source_file);
+            }
+            break;
+        case AST_ASSIGN:
+        case AST_CONST:
+            set_source_file_recursive(node->data.assign.left, source_file);
+            set_source_file_recursive(node->data.assign.right, source_file);
+            break;
+        case AST_BINOP:
+            set_source_file_recursive(node->data.binop.left, source_file);
+            set_source_file_recursive(node->data.binop.right, source_file);
+            break;
+        case AST_UNARYOP:
+            set_source_file_recursive(node->data.unaryop.expr, source_file);
+            break;
+        case AST_TYPE_LIST:
+            set_source_file_recursive(node->data.list_type.element_type, source_file);
+            break;
+        case AST_TYPE_FIXED_SIZE_LIST:
+            set_source_file_recursive(node->data.fixed_size_list_type.element_type, source_file);
+            break;
+        case AST_IF:
+            set_source_file_recursive(node->data.if_stmt.condition, source_file);
+            set_source_file_recursive(node->data.if_stmt.then_body, source_file);
+            set_source_file_recursive(node->data.if_stmt.else_body, source_file);
+            break;
+        case AST_WHILE:
+            set_source_file_recursive(node->data.while_stmt.condition, source_file);
+            set_source_file_recursive(node->data.while_stmt.body, source_file);
+            break;
+        case AST_FOR:
+            set_source_file_recursive(node->data.for_stmt.var, source_file);
+            set_source_file_recursive(node->data.for_stmt.start, source_file);
+            set_source_file_recursive(node->data.for_stmt.end, source_file);
+            set_source_file_recursive(node->data.for_stmt.body, source_file);
+            break;
+        case AST_INDEX:
+            set_source_file_recursive(node->data.index.target, source_file);
+            set_source_file_recursive(node->data.index.index, source_file);
+            break;
+        case AST_MEMBER_ACCESS:
+            set_source_file_recursive(node->data.member_access.object, source_file);
+            set_source_file_recursive(node->data.member_access.field, source_file);
+            break;
+        case AST_FUNCTION:
+            set_source_file_recursive(node->data.function.params, source_file);
+            set_source_file_recursive(node->data.function.return_type, source_file);
+            set_source_file_recursive(node->data.function.body, source_file);
+            break;
+        case AST_CALL:
+            set_source_file_recursive(node->data.call.func, source_file);
+            set_source_file_recursive(node->data.call.args, source_file);
+            break;
+        case AST_STRUCT_DEF:
+            set_source_file_recursive(node->data.struct_def.fields, source_file);
+            break;
+        case AST_STRUCT_LITERAL:
+            set_source_file_recursive(node->data.struct_literal.type_name, source_file);
+            set_source_file_recursive(node->data.struct_literal.fields, source_file);
+            break;
+        case AST_RETURN:
+            set_source_file_recursive(node->data.return_stmt.expr, source_file);
+            break;
+        case AST_GLOBAL:
+            set_source_file_recursive(node->data.global_decl.identifier, source_file);
+            set_source_file_recursive(node->data.global_decl.type, source_file);
+            set_source_file_recursive(node->data.global_decl.initializer, source_file);
+            break;
+        default:
+            break;
+    }
+}
 
 ASTNode* create_program_node_with_location(Location location) {
     ASTNode* node = malloc(sizeof(ASTNode));
@@ -1102,6 +1200,7 @@ ASTNode* create_global_node_with_location(ASTNode* identifier, ASTNode* type, AS
     node->data.global_decl.identifier = identifier;
     node->data.global_decl.type = type;
     node->data.global_decl.initializer = initializer;
+    node->data.global_decl.is_public = 0;
     return node;
 }
 
@@ -1630,7 +1729,11 @@ void print_ast(ASTNode* node, int indent) {
             if (node->data.return_stmt.expr) print_ast(node->data.return_stmt.expr, indent + 1);
             break;
         case AST_GLOBAL:
-            printf("Global Declaration:\n");
+            if (node->data.global_decl.is_public) {
+                printf("Public Global Declaration:\n");
+            } else {
+                printf("Global Declaration:\n");
+            }
             if (node->data.global_decl.identifier) {
                 for (int i = 0; i < indent + 1; i++) printf("  ");
                 printf("Identifier: ");
@@ -1696,10 +1799,12 @@ static void inline_imports_in_node(ASTNode* node) {
                 FILE* old_yyin = yyin;
                 ASTNode* old_root = root;
                 const char* old_current = current_input_filename;
+                int old_yylineno = yylineno;
 
                 yyin = f;
                 current_input_filename = full_module_path;
                 root = NULL;
+                yylineno = 1;
                 yyparse();
                 fclose(f);
 
@@ -1707,6 +1812,19 @@ static void inline_imports_in_node(ASTNode* node) {
                 yyin = old_yyin;//存储旧值
                 root = old_root;
                 current_input_filename = old_current;
+                yylineno = old_yylineno;
+
+                char* module_source_file = strdup(full_module_path);
+                if (module_source_file && module_root) {
+                    set_source_file_recursive(module_root, module_source_file);
+                }
+
+                if (module_root) {
+                    const char* old_inline_current = current_input_filename;
+                    current_input_filename = module_source_file ? module_source_file : full_module_path;
+                    inline_imports_in_node(module_root);
+                    current_input_filename = old_inline_current;
+                }
 
                 if (!module_root || module_root->type != AST_PROGRAM) {
                     if (module_root) free_ast(module_root);
@@ -1739,6 +1857,10 @@ static void inline_imports_in_node(ASTNode* node) {
                         if (s->data.struct_def.is_public) {
                             add_count++;
                         }
+                    } else if (s->type == AST_GLOBAL) {
+                        if (s->data.global_decl.is_public) {
+                            add_count++;
+                        }
                     } else if (s->type == AST_PROGRAM) {
                         for (int jj = 0; jj < s->data.program.statement_count; jj++) {
                             ASTNode* t = s->data.program.statements[jj];
@@ -1763,6 +1885,10 @@ static void inline_imports_in_node(ASTNode* node) {
                                 }
                             } else if (t->type == AST_STRUCT_DEF) {
                                 if (t->data.struct_def.is_public) {
+                                    add_count++;
+                                }
+                            } else if (t->type == AST_GLOBAL) {
+                                if (t->data.global_decl.is_public) {
                                     add_count++;
                                 }
                             }
@@ -1811,6 +1937,11 @@ static void inline_imports_in_node(ASTNode* node) {
                             new_statements[idx++] = s;
                             module_root->data.program.statements[j] = NULL;
                         }
+                    } else if (s->type == AST_GLOBAL) {
+                        if (s->data.global_decl.is_public) {
+                            new_statements[idx++] = s;
+                            module_root->data.program.statements[j] = NULL;
+                        }
                     } else if (s->type == AST_PROGRAM) {
                         for (int jj = 0; jj < s->data.program.statement_count; jj++) {
                             ASTNode* t = s->data.program.statements[jj];
@@ -1839,6 +1970,11 @@ static void inline_imports_in_node(ASTNode* node) {
                                 }
                             } else if (t->type == AST_STRUCT_DEF) {
                                 if (t->data.struct_def.is_public) {
+                                    new_statements[idx++] = t;
+                                    s->data.program.statements[jj] = NULL;
+                                }
+                            } else if (t->type == AST_GLOBAL) {
+                                if (t->data.global_decl.is_public) {
                                     new_statements[idx++] = t;
                                     s->data.program.statements[jj] = NULL;
                                 }

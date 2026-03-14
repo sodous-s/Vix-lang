@@ -8,6 +8,13 @@
 extern const char* current_input_filename;
 static int extract_public_functions_from_module(const char* module_path, SymbolTable* table);
 
+static const char* node_source_filename(const ASTNode* node) {
+    if (node && node->source_file) {
+        return node->source_file;
+    }
+    return current_input_filename ? current_input_filename : "unknown";
+}
+
 typedef struct VisitedNode {
     ASTNode* node;
     struct VisitedNode* next;
@@ -519,7 +526,7 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
         case AST_IDENTIFIER: {
             Symbol* sym = lookup_symbol(table, node->data.identifier.name);
             if (!sym) {
-                const char* filename = current_input_filename ? current_input_filename : "unknown";
+                const char* filename = node_source_filename(node);
                 int line = (node->location.first_line > 0) ? node->location.first_line : 1;
                 int column = (node->location.first_column > 0) ? node->location.first_column : 1;
                 report_undefined_identifier_with_location_and_column(
@@ -559,7 +566,7 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
             if (node->data.call.func && node->data.call.func->type == AST_IDENTIFIER) {
                 Symbol* sym = lookup_symbol(table, node->data.call.func->data.identifier.name);
                 if (!sym) {
-                    const char* filename = current_input_filename ? current_input_filename : "unknown";
+                    const char* filename = node_source_filename(node->data.call.func);
                     int line = (node->data.call.func->location.first_line > 0) ? node->data.call.func->location.first_line : 1;
                     int column = (node->data.call.func->location.first_column > 0) ? node->data.call.func->location.first_column : 1;
                     report_undefined_function_with_location_and_column(
@@ -587,7 +594,7 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                 const char* struct_name = node->data.struct_literal.type_name->data.identifier.name;
                 StructDef* struct_def = find_struct_definition(struct_name);
                 if (!struct_def) {
-                    const char* filename = current_input_filename ? current_input_filename : "unknown";
+                    const char* filename = node_source_filename(node->data.struct_literal.type_name);
                     int line = (node->data.struct_literal.type_name->location.first_line > 0) ? node->data.struct_literal.type_name->location.first_line : 1;
                     report_undefined_identifier_with_location_and_column(struct_name, filename, line, 1);
                     errors_found++;

@@ -1,8 +1,15 @@
 fn main() ->i32
 {
-    print("Hello, Vix!")
-    print("This is a test")//test 
-    print(1+2)
-    /* Hello world */
+    let x = 10
+    let y = 3.14
+    let z = x + y
+    let h = x * y 
+    let b = true
+    let s = "string"
+    /*print(x)
+    print(y)
+    print(z)
+    print(h)
+    print(s)*/
     return 0
 }

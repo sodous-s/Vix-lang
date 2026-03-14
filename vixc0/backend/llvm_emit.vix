@@ -1,4 +1,4 @@
-import "../ast.vix"
+import "../ast_build.vix"
 
 extern "C"
 {
@@ -86,25 +86,13 @@ pub fn decode_str(src: ptr, start0: i32, end0: i32) -> ptr
 		if (ch0 == '\\' and i0 + 1 < end0)
 		{
 			let e0 = src[i0 + 1]
-			if (e0 == 'n')
+			match e0
 			{
-				ch0 = '\n'
-			}
-			elif (e0 == 't')
-			{
-				ch0 = '\t'
-			}
-			elif (e0 == 'r')
-			{
-				ch0 = '\r'
-			}
-			elif (e0 == '0')
-			{
-				ch0 = 0
-			}
-			else
-			{
-				ch0 = e0
+				'n' -> ch0 = '\n'
+				't' -> ch0 = '\t'
+				'r' -> ch0 = '\r'
+				'0' -> ch0 = 0
+				_ -> ch0 = e0
 			}
 			i0 += 2
 		}
@@ -277,61 +265,62 @@ pub fn emit(src: ptr, src_len: i32, out_ll_path: ptr) -> i32
 			return 1
 		}
 
-		if (kind0 == 1)
+		match kind0
 		{
-			let str_c0 = decode_str(src, s0 + 1, s1 - 1)
-			if (str_c0 == nil)
-			{
-				LLVMDisposeBuilder(builder0)
-				LLVMDisposeModule(module0)
-				free(fn_name0)
-				printf("EmitError: malloc failed\n")
-				return 1
-			}
-			let str_val0 = LLVMBuildGlobalStringPtr(builder0, str_c0, "str_lit")
-			let call_args0 = malloc(16)
-			if (call_args0 == nil)
-			{
+			1 -> {
+				let str_c0 = decode_str(src, s0 + 1, s1 - 1)
+				if (str_c0 == nil)
+				{
+					LLVMDisposeBuilder(builder0)
+					LLVMDisposeModule(module0)
+					free(fn_name0)
+					printf("EmitError: malloc failed\n")
+					return 1
+				}
+				let str_val0 = LLVMBuildGlobalStringPtr(builder0, str_c0, "str_lit")
+				let call_args0 = malloc(16)
+				if (call_args0 == nil)
+				{
+					free(str_c0)
+					LLVMDisposeBuilder(builder0)
+					LLVMDisposeModule(module0)
+					free(fn_name0)
+					printf("EmitError: malloc failed\n")
+					return 1
+				}
+				call_args0[0] = fmt_s0
+				call_args0[1] = str_val0
+				LLVMBuildCall2(builder0, printf_ty0, printf_fn0, call_args0, 2, "calltmp")
+				free(call_args0)
 				free(str_c0)
-				LLVMDisposeBuilder(builder0)
-				LLVMDisposeModule(module0)
-				free(fn_name0)
-				printf("EmitError: malloc failed\n")
-				return 1
 			}
-			call_args0[0] = fmt_s0
-			call_args0[1] = str_val0
-			LLVMBuildCall2(builder0, printf_ty0, printf_fn0, call_args0, 2, "calltmp")
-			free(call_args0)
-			free(str_c0)
-		}
-		else
-		{
-			let val_ir0 = LLVMConstInt(i32_ty0, 0, 1)
-			if (has_add0 == 1)
-			{
-				let lhs_ir0 = LLVMConstInt(i32_ty0, lhs0, 1)
-				let rhs_ir0 = LLVMConstInt(i32_ty0, rhs0, 1)
-				val_ir0 = LLVMBuildAdd(builder0, lhs_ir0, rhs_ir0, "addtmp")
-			}
-			else
-			{
-				val_ir0 = LLVMConstInt(i32_ty0, val0, 1)
-			}
+			_ -> {
+				let val_ir0 = LLVMConstInt(i32_ty0, 0, 1)
+				if (has_add0 == 1)
+				{
+					let lhs_ir0 = LLVMConstInt(i32_ty0, lhs0, 1)
+					let rhs_ir0 = LLVMConstInt(i32_ty0, rhs0, 1)
+					val_ir0 = LLVMBuildAdd(builder0, lhs_ir0, rhs_ir0, "addtmp")
+				}
+				else
+				{
+					val_ir0 = LLVMConstInt(i32_ty0, val0, 1)
+				}
 
-			let call_args1 = malloc(16)
-			if (call_args1 == nil)
-			{
-				LLVMDisposeBuilder(builder0)
-				LLVMDisposeModule(module0)
-				free(fn_name0)
-				printf("EmitError: malloc failed\n")
-				return 1
+				let call_args1 = malloc(16)
+				if (call_args1 == nil)
+				{
+					LLVMDisposeBuilder(builder0)
+					LLVMDisposeModule(module0)
+					free(fn_name0)
+					printf("EmitError: malloc failed\n")
+					return 1
+				}
+				call_args1[0] = fmt_i0
+				call_args1[1] = val_ir0
+				LLVMBuildCall2(builder0, printf_ty0, printf_fn0, call_args1, 2, "calltmp")
+				free(call_args1)
 			}
-			call_args1[0] = fmt_i0
-			call_args1[1] = val_ir0
-			LLVMBuildCall2(builder0, printf_ty0, printf_fn0, call_args1, 2, "calltmp")
-			free(call_args1)
 		}
 	}
 

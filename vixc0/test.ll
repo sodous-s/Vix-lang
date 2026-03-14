@@ -5,14 +5,12 @@ target triple = "x86_64-pc-linux-gnu"
 
 @fmt_s_nl = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
 @fmt_i32_nl = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@str_lit = private unnamed_addr constant [12 x i8] c"Hello, Vix!\00", align 1
-@str_lit.1 = private unnamed_addr constant [15 x i8] c"This is a test\00", align 1
+@fmt_f64_nl = private unnamed_addr constant [4 x i8] c"%f\0A\00", align 1
 
 define i32 @main() {
 entry:
-  %calltmp = call i32 (ptr, ...) @printf(ptr @fmt_s_nl, ptr @str_lit)
-  %calltmp1 = call i32 (ptr, ...) @printf(ptr @fmt_s_nl, ptr @str_lit.1)
-  %calltmp2 = call i32 (ptr, ...) @printf(ptr @fmt_i32_nl, i32 3)
+  %x = alloca i32, align 4
+  store i32 10, ptr %x, align 4
   ret i32 0
 }
 

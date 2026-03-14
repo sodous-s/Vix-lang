@@ -1,0 +1,129 @@
+pub global TY_UNKNOWN = 0
+pub global TY_I32 = 1
+pub global TY_F64 = 2
+pub global TY_BOOL = 3
+pub global TY_STRING = 4
+
+pub type LiteralClass = LitString
+                      | LitBool
+                      | LitFloat
+                      | LitI32
+
+pub type BinaryClass = BinUnknown
+                    | BinString
+                    | BinBool
+                    | BinFloat
+                    | BinI32
+
+pub fn ti_is_float_literal(src: string, start0: i32, end0: i32) -> i32
+{
+    let i0 = start0
+    while (i0 < end0)
+    {
+        if (src[i0] == '.')
+        {
+            return 1
+        }
+        i0 += 1
+    }
+    return 0
+}
+
+pub fn ti_is_true(src: string, start0: i32, end0: i32) -> i32
+{
+    if (end0 - start0 != 4)
+    {
+        return 0
+    }
+    if (src[start0] == 't' and src[start0 + 1] == 'r' and src[start0 + 2] == 'u' and src[start0 + 3] == 'e')
+    {
+        return 1
+    }
+    return 0
+}
+
+pub fn ti_is_false(src: string, start0: i32, end0: i32) -> i32
+{
+    if (end0 - start0 != 5)
+    {
+        return 0
+    }
+    if (src[start0] == 'f' and src[start0 + 1] == 'a' and src[start0 + 2] == 'l' and src[start0 + 3] == 's' and src[start0 + 4] == 'e')
+    {
+        return 1
+    }
+    return 0
+}
+
+pub fn ti_infer_literal(src: string, start0: i32, end0: i32, kind: i32) -> i32
+{
+    let cls0 = LitI32
+    if (kind == TY_STRING)
+    {
+        cls0 = LitString
+    }
+    elif (ti_is_true(src, start0, end0) == 1 or ti_is_false(src, start0, end0) == 1)
+    {
+        cls0 = LitBool
+    }
+    elif (ti_is_float_literal(src, start0, end0) == 1)
+    {
+        cls0 = LitFloat
+    }
+
+    match cls0
+    {
+        LitString -> return TY_STRING
+        LitBool -> return TY_BOOL
+        LitFloat -> return TY_F64
+        LitI32 -> return TY_I32
+    }
+}
+
+pub fn ti_infer_binary(lhs_ty: i32, rhs_ty: i32, op: i32) -> i32
+{
+    let cls0 = BinI32
+    if (lhs_ty == TY_UNKNOWN or rhs_ty == TY_UNKNOWN)
+    {
+        cls0 = BinUnknown
+    }
+    elif (lhs_ty == TY_STRING or rhs_ty == TY_STRING)
+    {
+        cls0 = BinString
+    }
+    elif (lhs_ty == TY_BOOL or rhs_ty == TY_BOOL)
+    {
+        cls0 = BinBool
+    }
+    elif (lhs_ty == TY_F64 or rhs_ty == TY_F64)
+    {
+        cls0 = BinFloat
+    }
+
+    match cls0
+    {
+        BinUnknown -> return TY_UNKNOWN
+        BinBool -> return TY_UNKNOWN
+        BinFloat -> return TY_F64
+        BinI32 -> return TY_I32
+        BinString -> {
+            if (op == '+' and lhs_ty == TY_STRING and rhs_ty == TY_STRING)
+            {
+                return TY_STRING
+            }
+            return TY_UNKNOWN
+        }
+    }
+}
+
+pub fn ti_type_name(ty: i32) -> ptr
+{
+    match ty
+    {
+        TY_I32 -> return "i32"
+        TY_F64 -> return "f64"
+        TY_BOOL -> return "bool"
+        TY_STRING -> return "string"
+        _ -> return "unknown"
+    }
+}

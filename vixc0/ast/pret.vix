@@ -1,0 +1,342 @@
+import "base.vix"
+
+pub type AstValueKind = AstValueString
+                      | AstValueBool
+                      | AstValueFloat
+                      | AstValueNumber
+                      | AstValueIdent
+
+pub fn ast_print_ident(indent0: i32) -> i32
+{
+	let i0 = 0
+	while (i0 < indent0)
+	{
+		printf(" ")
+		i0 += 1
+	}
+	return 0
+}
+
+pub fn ast_parse_primary_end(src: string, pos0: i32, total0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let s_end0 = ast_parse_string(src, p0, total0)
+	if (s_end0 >= 0)
+	{
+		return s_end0
+	}
+	let n_end0 = ast_parse_numeric(src, p0, total0)
+	if (n_end0 >= 0)
+	{
+		return n_end0
+	}
+	let id_end0 = ast_parse_ident(src, p0, total0)
+	if (id_end0 >= 0)
+	{
+		return id_end0
+	}
+	return -1
+}
+
+pub fn ast_print_span_raw(src: string, start0: i32, end0: i32) -> i32
+{
+	let i0 = start0
+	while (i0 < end0)
+	{
+		printf("%c", src[i0])
+		i0 += 1
+	}
+	return 0
+}
+
+pub fn ast_classify_value(src: string, start0: i32, end0: i32) -> AstValueKind
+{
+	if (src[start0] == '"')
+	{
+		return AstValueString
+	}
+	if (ti_is_true(src, start0, end0) == 1 or ti_is_false(src, start0, end0) == 1)
+	{
+		return AstValueBool
+	}
+	if (isdigit(src[start0]) == 1)
+	{
+		if (ti_is_float_literal(src, start0, end0) == 1)
+		{
+			return AstValueFloat
+		}
+		return AstValueNumber
+	}
+	return AstValueIdent
+}
+
+pub fn ast_print_primary_inline(src: string, start0: i32, end0: i32) -> i32
+{
+	let kind0 = ast_classify_value(src, start0, end0)
+	match kind0
+	{
+		AstValueString -> printf("STRING(")
+		AstValueBool -> printf("BOOL(")
+		AstValueFloat -> printf("FLOAT(")
+		AstValueNumber -> printf("NUMBER(")
+		AstValueIdent -> printf("IDENT(")
+	}
+	ast_print_span_raw(src, start0, end0)
+	printf(")")
+	return 0
+}
+
+pub fn ast_print_expr_value(src: string, pos0: i32, total0: i32, indent0: i32) -> i32
+{
+	let lhs_start0 = ast_skip_ws(src, pos0, total0)
+	let lhs_end0 = ast_parse_primary_end(src, lhs_start0, total0)
+	if (lhs_end0 < 0)
+	{
+		printf("AstError: invalid expression\n")
+		return -1
+	}
+
+	let op_pos0 = ast_skip_ws(src, lhs_end0, total0)
+	if (op_pos0 < total0 and (src[op_pos0] == '+' or src[op_pos0] == '*'))
+	{
+		let rhs_start0 = ast_skip_ws(src, op_pos0 + 1, total0)
+		let rhs_end0 = ast_parse_primary_end(src, rhs_start0, total0)
+		if (rhs_end0 < 0)
+		{
+			printf("AstError: invalid binary expression\n")
+			return -1
+		}
+		ast_print_ident(indent0)
+		printf("value:\n")
+		ast_print_ident(indent0 + 2)
+		printf("BINARY:\n")
+		ast_print_ident(indent0 + 4)
+		printf("op: %c\n", src[op_pos0])
+		ast_print_ident(indent0 + 4)
+		printf("lhs: ")
+		ast_print_primary_inline(src, lhs_start0, lhs_end0)
+		printf("\n")
+		ast_print_ident(indent0 + 4)
+		printf("rhs: ")
+		ast_print_primary_inline(src, rhs_start0, rhs_end0)
+		printf("\n")
+		return rhs_end0
+	}
+
+	ast_print_ident(indent0)
+	printf("value: ")
+	ast_print_primary_inline(src, lhs_start0, lhs_end0)
+	printf("\n")
+	return lhs_end0
+}
+
+pub fn ast_dump_let_stmt(src: string, pos0: i32, total0: i32, indent0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let p1 = ast_parse_kw_let(src, p0, total0)
+	if (p1 < 0)
+	{
+		return -1
+	}
+	let name_s0 = ast_skip_ws(src, p1, total0)
+	let name_e0 = ast_parse_ident(src, name_s0, total0)
+	if (name_e0 < 0)
+	{
+		printf("AstError: expected variable name\n")
+		return -1
+	}
+	let p2 = ast_skip_ws(src, name_e0, total0)
+	if (p2 >= total0 or src[p2] != '=')
+	{
+		printf("AstError: expected '=' in let\n")
+		return -1
+	}
+	ast_print_ident(indent0)
+	printf("- LET:\n")
+	ast_print_ident(indent0 + 2)
+	printf("name: ")
+	ast_print_span_raw(src, name_s0, name_e0)
+	printf("\n")
+	let expr_end0 = ast_print_expr_value(src, p2 + 1, total0, indent0 + 2)
+	if (expr_end0 < 0)
+	{
+		return -1
+	}
+	return expr_end0
+}
+
+pub fn ast_dump_print_stmt(src: string, pos0: i32, total0: i32, indent0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let p1 = ast_parse_kw_print(src, p0, total0)
+	if (p1 < 0)
+	{
+		return -1
+	}
+	let p2 = ast_skip_ws(src, p1, total0)
+	if (p2 >= total0 or src[p2] != '(')
+	{
+		printf("AstError: expected '(' after print\n")
+		return -1
+	}
+	ast_print_ident(indent0)
+	printf("- PRINT:\n")
+	let expr_end0 = ast_print_expr_value(src, p2 + 1, total0, indent0 + 2)
+	if (expr_end0 < 0)
+	{
+		return -1
+	}
+	let p3 = ast_skip_ws(src, expr_end0, total0)
+	if (p3 >= total0 or src[p3] != ')')
+	{
+		printf("AstError: expected ')' after print arg\n")
+		return -1
+	}
+	return p3 + 1
+}
+
+pub fn ast_dump_return_stmt(src: string, pos0: i32, total0: i32, indent0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let p1 = ast_parse_kw_return(src, p0, total0)
+	if (p1 < 0)
+	{
+		return -1
+	}
+	ast_print_ident(indent0)
+	printf("- RETURN:\n")
+	let expr_end0 = ast_print_expr_value(src, p1, total0, indent0 + 2)
+	if (expr_end0 < 0)
+	{
+		return -1
+	}
+	return expr_end0
+}
+
+pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
+{
+	let pos10 = 0
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	pos10 = ast_parse_kw_fn(src, pos10, total6)
+	if (pos10 < 0)
+	{
+		printf("AstError: expected 'fn'\n")
+		return 1
+	}
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	let fname_start0 = pos10
+	pos10 = ast_parse_ident(src, pos10, total6)
+	if (pos10 < 0)
+	{
+		printf("AstError: expected function name\n")
+		return 1
+	}
+	let fname_end0 = pos10
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 >= total6 or src[pos10] != '(')
+	{
+		printf("AstError: expected '('\n")
+		return 1
+	}
+	pos10 += 1
+
+	let param_count0 = 0
+	pos10 = ast_parse_params_core(src, pos10, total6, & param_count0)
+	if (pos10 < 0)
+	{
+		return 1
+	}
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 >= total6 or src[pos10] != ')')
+	{
+		printf("AstError: expected ')'\n")
+		return 1
+	}
+	pos10 += 1
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 + 1 >= total6 or src[pos10] != '-' or src[pos10 + 1] != '>')
+	{
+		printf("AstError: expected '->'\n")
+		return 1
+	}
+	pos10 += 2
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	let rtype_start0 = pos10
+	let rtype_end0 = ast_parse_ident(src, pos10, total6)
+	if (rtype_end0 < 0)
+	{
+		printf("AstError: expected return type\n")
+		return 1
+	}
+	pos10 = rtype_end0
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 >= total6 or src[pos10] != '{')
+	{
+		printf("AstError: expected '{'\n")
+		return 1
+	}
+	pos10 += 1
+
+	printf("FUNCTION:\n")
+	ast_print_ident(2)
+	printf("name: ")
+	ast_print_span_raw(src, fname_start0, fname_end0)
+	printf("\n")
+	ast_print_ident(2)
+	printf("return_type: ")
+	ast_print_span_raw(src, rtype_start0, rtype_end0)
+	printf("\n")
+	ast_print_ident(2)
+	printf("body:\n")
+	ast_print_ident(4)
+	printf("BLOCK:\n")
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	while (1)
+	{
+		let next0 = ast_dump_let_stmt(src, pos10, total6, 6)
+		if (next0 >= 0)
+		{
+			pos10 = ast_skip_ws(src, next0, total6)
+			continue
+		}
+
+		next0 = ast_dump_print_stmt(src, pos10, total6, 6)
+		if (next0 >= 0)
+		{
+			pos10 = ast_skip_ws(src, next0, total6)
+			continue
+		}
+
+		next0 = ast_dump_return_stmt(src, pos10, total6, 6)
+		if (next0 >= 0)
+		{
+			pos10 = ast_skip_ws(src, next0, total6)
+			break
+		}
+
+		printf("AstError: expected statement\n")
+		return 1
+	}
+
+	if (pos10 >= total6 or src[pos10] != '}')
+	{
+		printf("AstError: expected '}'\n")
+		return 1
+	}
+	pos10 += 1
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 != total6)
+	{
+		printf("AstError: trailing tokens\n")
+		return 1
+	}
+	return 0
+}

@@ -97,6 +97,7 @@ typedef enum {
 typedef struct ASTNode {
     NodeType type;
     Location location;// 位置信息
+    const char* source_file;
     MutabilityType mutability; // 可变性标记
     union {
         struct {
@@ -211,6 +212,7 @@ typedef struct ASTNode {
             struct ASTNode* identifier;
             struct ASTNode* type;//可能为NULL
             struct ASTNode* initializer;
+            int is_public;
         } global_decl;
         struct {  // 添加import节点的数据结构
             char* module_path;

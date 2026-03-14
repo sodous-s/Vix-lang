@@ -1,0 +1,196 @@
+import "base.vix"
+import "pret.vix"
+
+pub fn ast_build_function(src: string, total6: i32, mut out_fn_name_start: & i32, mut out_fn_name_end: & i32, mut out_body_start: & i32, mut out_body_end: & i32, mut out_ret_value: & i32) -> i32
+{
+	if (ast_env_init() != 0)
+	{
+		return 1
+	}
+
+	let pos10 = 0
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	pos10 = ast_parse_kw_fn(src, pos10, total6)
+	if (pos10 < 0)
+	{
+		printf("AstError: expected 'fn'\n")
+		return 1
+	}
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	@out_fn_name_start = pos10
+	pos10 = ast_parse_ident(src, pos10, total6)
+	if (pos10 < 0)
+	{
+		printf("AstError: expected function name\n")
+		return 1
+	}
+	@out_fn_name_end = pos10
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 >= total6 or src[pos10] != '(')
+	{
+		printf("AstError: expected '('\n")
+		return 1
+	}
+	pos10 += 1
+
+	let param_count0 = 0
+	pos10 = ast_parse_params_core(src, pos10, total6, & param_count0)
+	if (pos10 < 0)
+	{
+		return 1
+	}
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 >= total6 or src[pos10] != ')')
+	{
+		printf("AstError: expected ')'\n")
+		return 1
+	}
+	pos10 += 1
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 + 1 >= total6 or src[pos10] != '-' or src[pos10 + 1] != '>')
+	{
+		printf("AstError: expected '->'\n")
+		return 1
+	}
+	pos10 += 2
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	let rt_end0 = ast_parse_ident(src, pos10, total6)
+	if (rt_end0 < 0)
+	{
+		printf("AstError: expected return type\n")
+		return 1
+	}
+	pos10 = rt_end0
+
+	pos10 = ast_skip_ws(src, pos10, total6)
+	if (pos10 >= total6 or src[pos10] != '{')
+	{
+		printf("AstError: expected '{'\n")
+		return 1
+	}
+	pos10 += 1
+	@out_body_start = ast_skip_ws(src, pos10, total6)
+
+	let scan0 = @out_body_start
+	while (1)
+	{
+		let let_next0 = ast_parse_let_stmt_node(src, scan0, total6)
+		if (let_next0 >= 0)
+		{
+			scan0 = ast_skip_ws(src, let_next0, total6)
+			continue
+		}
+
+		let kind0 = 0
+		let val0 = 0
+		let s0 = 0
+		let s1 = 0
+		let lhs0 = 0
+		let rhs0 = 0
+		let has_add0 = 0
+		let next0 = ast_parse_print_stmt_node(
+		src,
+		scan0, 
+		total6, 
+		& kind0,
+		& val0, 
+		& s0, & s1, 
+		& lhs0,
+		& rhs0, 
+		& has_add0
+		)
+		if (next0 < 0)
+		{
+			break
+		}
+		scan0 = ast_skip_ws(src, next0, total6)
+	}
+
+	let ret_pos0 = ast_parse_kw_return(src, scan0, total6)
+	if (ret_pos0 < 0)
+	{
+		printf("AstError: expected 'return'\n")
+		return 1
+	}
+	@out_body_end = scan0
+
+	ret_pos0 = ast_skip_ws(src, ret_pos0, total6)
+	let rv_end0 = ast_parse_number(src, ret_pos0, total6)
+	if (rv_end0 < 0)
+	{
+		printf("AstError: expected integer after return\n")
+		return 1
+	}
+	@out_ret_value = ast_parse_number_value(src, ret_pos0, rv_end0)
+
+	ret_pos0 = ast_skip_ws(src, rv_end0, total6)
+	if (ret_pos0 >= total6 or src[ret_pos0] != '}')
+	{
+		printf("AstError: expected '}'\n")
+		return 1
+	}
+	ret_pos0 += 1
+	ret_pos0 = ast_skip_ws(src, ret_pos0, total6)
+	if (ret_pos0 < total6 and src[ret_pos0] == 0)
+	{
+		return 0
+	}
+	if (ret_pos0 != total6)
+	{
+		printf("AstError: trailing tokens\n")
+		return 1
+	}
+	return 0
+}
+
+pub fn ast_next_print_node(src: string, mut io_pos: & i32, body_end: i32, mut out_kind: & i32, mut out_i32: & i32, mut out_s0: & i32, mut out_s1: & i32, mut out_lhs: & i32, mut out_rhs: & i32, mut out_has_add: & i32) -> i32
+{
+	let p0 = ast_skip_ws(src, @io_pos, body_end)
+	while (p0 < body_end)
+	{
+		let let_next0 = ast_parse_let_stmt_node(src, p0, body_end)
+		if (let_next0 >= 0)
+		{
+			p0 = ast_skip_ws(src, let_next0, body_end)
+			@io_pos = p0
+			continue
+		}
+
+		let p1 = ast_parse_print_stmt_node(
+		src,
+		p0,
+		body_end, 
+		out_kind, 
+		out_i32, 
+		out_s0, 
+		out_s1, 
+		out_lhs, 
+		out_rhs, 
+		out_has_add
+		)
+
+		if (p1 < 0)
+		{
+			return 0
+		}
+		@io_pos = p1
+		return 1
+	}
+	return 0
+}
+
+pub fn ast_with_len(src: string, total6: i32) -> i32
+{
+	return ast_dump_pretty_with_len(src, total6)
+}
+
+pub fn ast(src: string) -> i32
+{
+	return ast_with_len(src, source_text_len(src))
+}

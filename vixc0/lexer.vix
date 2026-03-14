@@ -6,12 +6,17 @@ extern "C"
 pub type TokenKind = TkKwFn
                | TkKwReturn
                | TkKwPrint
+               | TkKwLet
                | TkTypeI32
                | TkIdent
                | TkNumber
+               | TkFloat
+               | TkBool
                | TkString
                | TkArrow
                | TkPlus
+               | TkStar
+               | TkAssign
                | TkColon
                | TkComma
                | TkLParen
@@ -77,12 +82,17 @@ pub fn emit_token(kind: TokenKind, src: string, start: i32, end: i32) -> i32
         TkKwFn -> span("KW_FN", src, start, end)
         TkKwReturn -> span("KW_RETURN", src, start, end)
         TkKwPrint -> span("KW_PRINT", src, start, end)
+        TkKwLet -> span("KW_LET", src, start, end)
         TkTypeI32 -> span("TYPE_I32", src, start, end)
         TkIdent -> span("IDENT", src, start, end)
         TkNumber -> span("NUMBER", src, start, end)
+        TkFloat -> span("FLOAT", src, start, end)
+        TkBool -> span("BOOL", src, start, end)
         TkString -> span("STRING", src, start, end)
         TkArrow -> span("ARROW", src, start, end)
         TkPlus -> span("PLUS", src, start, end)
+        TkStar -> span("STAR", src, start, end)
+        TkAssign -> span("ASSIGN", src, start, end)
         TkColon -> span("COLON", src, start, end)
         TkComma -> span("COMMA", src, start, end)
         TkLParen -> span("LPAREN", src, start, end)
@@ -92,6 +102,58 @@ pub fn emit_token(kind: TokenKind, src: string, start: i32, end: i32) -> i32
         _ -> span("UNKNOWN", src, start, end)
     }
     return 0
+}
+
+pub fn classify_ident_kind(src: string, start: i32, end: i32) -> TokenKind
+{
+    let len = end - start
+    match len
+    {
+        2 -> {
+            if (src[start] == 'f' and src[start + 1] == 'n')
+            {
+                return TkKwFn
+            }
+            return TkIdent
+        }
+        3 -> {
+            if (src[start] == 'l' and src[start + 1] == 'e' and src[start + 2] == 't')
+            {
+                return TkKwLet
+            }
+            if (src[start] == 'i' and src[start + 1] == '3' and src[start + 2] == '2')
+            {
+                return TkTypeI32
+            }
+            return TkIdent
+        }
+        4 -> {
+            if (src[start] == 't' and src[start + 1] == 'r' and src[start + 2] == 'u' and src[start + 3] == 'e')
+            {
+                return TkBool
+            }
+            return TkIdent
+        }
+        5 -> {
+            if (src[start] == 'p' and src[start + 1] == 'r' and src[start + 2] == 'i' and src[start + 3] == 'n' and src[start + 4] == 't')
+            {
+                return TkKwPrint
+            }
+            if (src[start] == 'f' and src[start + 1] == 'a' and src[start + 2] == 'l' and src[start + 3] == 's' and src[start + 4] == 'e')
+            {
+                return TkBool
+            }
+            return TkIdent
+        }
+        6 -> {
+            if (src[start] == 'r' and src[start + 1] == 'e' and src[start + 2] == 't' and src[start + 3] == 'u' and src[start + 4] == 'r' and src[start + 5] == 'n')
+            {
+                return TkKwReturn
+            }
+            return TkIdent
+        }
+        _ -> return TkIdent
+    }
 }
 
 pub fn lexer_with_len(src: string, n: i32) -> i32
@@ -161,6 +223,16 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
             emit_token(TkPlus, src, i, i + 1)
             i += 1
         }
+        elif (c == '*')
+        {
+            emit_token(TkStar, src, i, i + 1)
+            i += 1
+        }
+        elif (c == '=')
+        {
+            emit_token(TkAssign, src, i, i + 1)
+            i += 1
+        }
         elif (c == ',')
         {
             emit_token(TkComma, src, i, i + 1)
@@ -184,11 +256,28 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
         elif (isdigit(c) == 1)
         {
             let start = i
+            let has_dot = 0
             while (i < n and isdigit(src[i]) == 1)
             {
                 i += 1
             }
-            emit_token(TkNumber, src, start, i)
+            if (i < n and src[i] == '.' and i + 1 < n and isdigit(src[i + 1]) == 1)
+            {
+                has_dot = 1
+                i += 1
+                while (i < n and isdigit(src[i]) == 1)
+                {
+                    i += 1
+                }
+            }
+            if (has_dot == 1)
+            {
+                emit_token(TkFloat, src, start, i)
+            }
+            else
+            {
+                emit_token(TkNumber, src, start, i)
+            }
         }
         elif (c == '"')
         {
@@ -218,27 +307,8 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
             {
                 i += 1
             }
-
-            let len = i - start
-            if (len == 2 and src[start] == 'f' and src[start + 1] == 'n')
-            {
-                emit_token(TkKwFn, src, start, i)
-            }
-            elif (len == 6 and src[start] == 'r' and src[start + 1] == 'e' and src[start + 2] == 't' and src[start + 3] == 'u' and src[start + 4] == 'r' and src[start + 5] == 'n')
-            {
-                emit_token(TkKwReturn, src, start, i)
-            }
-            elif (len == 5 and src[start] == 'p' and src[start + 1] == 'r' and src[start + 2] == 'i' and src[start + 3] == 'n' and src[start + 4] == 't')
-            {
-                emit_token(TkKwPrint, src, start, i)
-            }
-            elif (len == 3 and src[start] == 'i' and src[start + 1] == '3' and src[start + 2] == '2')
-            {
-                emit_token(TkTypeI32, src, start, i)
-            }
-            else {
-                emit_token(TkIdent, src, start, i)
-            }
+            let ident_kind = classify_ident_kind(src, start, i)
+            emit_token(ident_kind, src, start, i)
         }
         else
         {
