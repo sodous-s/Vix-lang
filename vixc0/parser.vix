@@ -1,5 +1,5 @@
 import "lexer.vix"
-import "ast_pretty.vix"
+import "ast/pret.vix"
 
 extern "C"
 {

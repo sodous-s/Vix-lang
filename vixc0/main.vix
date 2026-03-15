@@ -15,6 +15,8 @@ pub type CliMode = ModeHelp
                | ModeDebug
                | ModeEmit
                | ModeUnknown
+               | ModeHelp1
+               | ModeVersion
 
 pub fn print_usage(prog: ptr) -> i32
 {
@@ -38,6 +40,14 @@ pub fn parse_cli_mode(flag: ptr) -> CliMode
     {
         return ModeEmit
     }
+    if(strcmp(flag, "-h") == 0)
+    {
+        return ModeHelp1
+    }
+    if(strcmp(flag, "--version") == 0 or strcmp(flag, "-v") == 0)
+    {
+        return ModeVersion
+    }
     return ModeUnknown
 }
 
@@ -53,6 +63,10 @@ fn main(argc: i32, argv: ptr) -> i32
     match mode
     {
         ModeHelp -> {
+            print_usage(argv[0])
+            return 0
+        }
+        ModeHelp1 -> {
             print_usage(argv[0])
             return 0
         }
@@ -92,6 +106,10 @@ fn main(argc: i32, argv: ptr) -> i32
             let input_file = argv[2]
             let output_file = argv[3]
             return compile(input_file, output_file)
+        }
+        ModeVersion -> {
+            printf("vixc bootstrap compiler stage0 by Mincx1203\n")
+            return 0
         }
         ModeUnknown -> {
             print_usage(argv[0])
