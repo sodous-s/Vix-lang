@@ -27,3 +27,8 @@ pub fn fwrite(ptr: ptr, size: usize, count: usize, file: ptr) -> usize
 {
     return fwrite(ptr, size, count, file)
 }
+pub fn panic(msg: ptr) -> i32
+{
+    printf("Panic: %s\n", msg)
+    while (1) {}
+}

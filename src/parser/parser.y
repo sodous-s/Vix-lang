@@ -221,7 +221,7 @@ build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
 %type <node> program statement_list statement 
 %type <node> extern_block extern_decl extern_decl_list
 %type <node> struct_fields struct_field struct_init_fields struct_init_field
-%type <node> type param_list function_definition pub_function_definition
+%type <node> type param_list function_definition pub_function_definition function_return_type
 %type <node> print_statement assignment_statement compound_assignment_statement
 %type <node> input_statement if_statement while_statement for_statement
 %type <node> expression logical_expression comparison_expression additive_expression term factor power factor_unary
@@ -565,12 +565,17 @@ param_list
     }
     ;
 
+function_return_type
+    : ARROW type { $$ = $2; }
+    | COLON type { $$ = $2; }
+    ;
+
 pub_function_definition
-    : PUB FN IDENTIFIER LPAREN RPAREN ARROW type LBRACE statement_list RBRACE {
-        $$ = create_public_function_node($3, NULL, $7, $9);
+    : PUB FN IDENTIFIER LPAREN RPAREN function_return_type LBRACE statement_list RBRACE {
+        $$ = create_public_function_node($3, NULL, $6, $8);
     }
-    | PUB FN IDENTIFIER LPAREN param_list RPAREN ARROW type LBRACE statement_list RBRACE {
-        $$ = create_public_function_node($3, $5, $8, $10);
+    | PUB FN IDENTIFIER LPAREN param_list RPAREN function_return_type LBRACE statement_list RBRACE {
+        $$ = create_public_function_node($3, $5, $7, $9);
     }
     | PUB FN IDENTIFIER LPAREN RPAREN LBRACE statement_list RBRACE {
         ASTNode* void_type = create_type_node(AST_TYPE_VOID);
@@ -583,12 +588,12 @@ pub_function_definition
     ;
 
 function_definition
-    : FN IDENTIFIER LPAREN RPAREN ARROW type LBRACE statement_list RBRACE {
-        $$ = create_function_node($2, NULL, $6, $8);
+    : FN IDENTIFIER LPAREN RPAREN function_return_type LBRACE statement_list RBRACE {
+        $$ = create_function_node($2, NULL, $5, $7);
         $$->data.function.is_public = 0;
     }
-    | FN IDENTIFIER LPAREN param_list RPAREN ARROW type LBRACE statement_list RBRACE {
-        $$ = create_function_node($2, $4, $7, $9);
+    | FN IDENTIFIER LPAREN param_list RPAREN function_return_type LBRACE statement_list RBRACE {
+        $$ = create_function_node($2, $4, $6, $8);
         $$->data.function.is_public = 0;
     }
     | FN IDENTIFIER LPAREN RPAREN LBRACE statement_list RBRACE {
@@ -604,19 +609,19 @@ function_definition
     ;
 
 extern_decl
-    : FN IDENTIFIER LPAREN RPAREN ARROW type {
-        $$ = create_extern_function_node($2, NULL, $6, NULL);
+    : FN IDENTIFIER LPAREN RPAREN function_return_type {
+        $$ = create_extern_function_node($2, NULL, $5, NULL);
     }
-    | FN IDENTIFIER LPAREN param_list RPAREN ARROW type {
-        $$ = create_extern_function_node($2, $4, $7, NULL);
+    | FN IDENTIFIER LPAREN param_list RPAREN function_return_type {
+        $$ = create_extern_function_node($2, $4, $6, NULL);
     }
-    | FN IDENTIFIER LPAREN param_list COMMA DOTDOTDOT RPAREN ARROW type {
-        ASTNode* fn = create_extern_function_node($2, $4, $9, NULL);
+    | FN IDENTIFIER LPAREN param_list COMMA DOTDOTDOT RPAREN function_return_type {
+        ASTNode* fn = create_extern_function_node($2, $4, $8, NULL);
         fn->data.function.vararg = 1;
         $$ = fn;
     }
-    | FN IDENTIFIER LPAREN DOTDOTDOT RPAREN ARROW type {
-        ASTNode* fn = create_extern_function_node($2, NULL, $7, NULL);
+    | FN IDENTIFIER LPAREN DOTDOTDOT RPAREN function_return_type {
+        ASTNode* fn = create_extern_function_node($2, NULL, $6, NULL);
         fn->data.function.vararg = 1;
         $$ = fn;
     }
