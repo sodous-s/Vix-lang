@@ -195,6 +195,59 @@ pub fn ast_dump_print_stmt(src: string, pos0: i32, total0: i32, indent0: i32) ->
 	return p3 + 1
 }
 
+pub fn ast_dump_call_stmt(src: string, pos0: i32, total0: i32, indent0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let name_s0 = p0
+	let name_e0 = ast_parse_ident(src, p0, total0)
+	if (name_e0 < 0)
+	{
+		return -1
+	}
+
+	let p1 = ast_skip_ws(src, name_e0, total0)
+	if (p1 >= total0 or src[p1] != '(')
+	{
+		return -1
+	}
+
+	ast_print_ident(indent0)
+	printf("- CALL:\n")
+	ast_print_ident(indent0 + 2)
+	printf("name: ")
+	ast_print_span_raw(src, name_s0, name_e0)
+	printf("\n")
+
+	let cur0 = ast_skip_ws(src, p1 + 1, total0)
+	if (cur0 < total0 and src[cur0] == ')')
+	{
+		return cur0 + 1
+	}
+
+	while (1)
+	{
+		let arg_end0 = ast_print_expr_value(src, cur0, total0, indent0 + 2)
+		if (arg_end0 < 0)
+		{
+			printf("AstError: expected call argument\n")
+			return -1
+		}
+
+		cur0 = ast_skip_ws(src, arg_end0, total0)
+		if (cur0 < total0 and src[cur0] == ',')
+		{
+			cur0 = ast_skip_ws(src, cur0 + 1, total0)
+			continue
+		}
+		if (cur0 < total0 and src[cur0] == ')')
+		{
+			return cur0 + 1
+		}
+		printf("AstError: expected ')' after call args\n")
+		return -1
+	}
+}
+
 pub fn ast_dump_return_stmt(src: string, pos0: i32, total0: i32, indent0: i32) -> i32
 {
 	let p0 = ast_skip_ws(src, pos0, total0)
@@ -213,16 +266,15 @@ pub fn ast_dump_return_stmt(src: string, pos0: i32, total0: i32, indent0: i32) -
 	return expr_end0
 }
 
-pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
+pub fn ast_dump_one_function(src: string, pos_in0: i32, total6: i32) -> i32
 {
-	let pos10 = 0
+	let pos10 = ast_skip_ws(src, pos_in0, total6)
 
-	pos10 = ast_skip_ws(src, pos10, total6)
 	pos10 = ast_parse_kw_fn(src, pos10, total6)
 	if (pos10 < 0)
 	{
 		printf("AstError: expected 'fn'\n")
-		return 1
+		return -1
 	}
 
 	pos10 = ast_skip_ws(src, pos10, total6)
@@ -231,7 +283,7 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 	if (pos10 < 0)
 	{
 		printf("AstError: expected function name\n")
-		return 1
+		return -1
 	}
 	let fname_end0 = pos10
 
@@ -239,7 +291,7 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 	if (pos10 >= total6 or src[pos10] != '(')
 	{
 		printf("AstError: expected '('\n")
-		return 1
+		return -1
 	}
 	pos10 += 1
 
@@ -247,24 +299,25 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 	pos10 = ast_parse_params_core(src, pos10, total6, & param_count0)
 	if (pos10 < 0)
 	{
-		return 1
+		return -1
 	}
 
 	pos10 = ast_skip_ws(src, pos10, total6)
 	if (pos10 >= total6 or src[pos10] != ')')
 	{
 		printf("AstError: expected ')'\n")
-		return 1
+		return -1
 	}
 	pos10 += 1
 
 	pos10 = ast_skip_ws(src, pos10, total6)
-	if (pos10 + 1 >= total6 or src[pos10] != '-' or src[pos10 + 1] != '>')
+	let ret_sep_end0 = ast_parse_ret_type_sep(src, pos10, total6)
+	if (ret_sep_end0 < 0)
 	{
-		printf("AstError: expected '->'\n")
-		return 1
+		printf("AstError: expected ':' or '->'\n")
+		return -1
 	}
-	pos10 += 2
+	pos10 = ret_sep_end0
 
 	pos10 = ast_skip_ws(src, pos10, total6)
 	let rtype_start0 = pos10
@@ -272,7 +325,7 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 	if (rtype_end0 < 0)
 	{
 		printf("AstError: expected return type\n")
-		return 1
+		return -1
 	}
 	pos10 = rtype_end0
 
@@ -280,7 +333,7 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 	if (pos10 >= total6 or src[pos10] != '{')
 	{
 		printf("AstError: expected '{'\n")
-		return 1
+		return -1
 	}
 	pos10 += 1
 
@@ -315,6 +368,13 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 			continue
 		}
 
+		next0 = ast_dump_call_stmt(src, pos10, total6, 6)
+		if (next0 >= 0)
+		{
+			pos10 = ast_skip_ws(src, next0, total6)
+			continue
+		}
+
 		next0 = ast_dump_return_stmt(src, pos10, total6, 6)
 		if (next0 >= 0)
 		{
@@ -323,20 +383,29 @@ pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
 		}
 
 		printf("AstError: expected statement\n")
-		return 1
+		return -1
 	}
 
 	if (pos10 >= total6 or src[pos10] != '}')
 	{
 		printf("AstError: expected '}'\n")
-		return 1
+		return -1
 	}
 	pos10 += 1
-	pos10 = ast_skip_ws(src, pos10, total6)
-	if (pos10 != total6)
+	return ast_skip_ws(src, pos10, total6)
+}
+
+pub fn ast_dump_pretty_with_len(src: string, total6: i32) -> i32
+{
+	let pos10 = ast_skip_ws(src, 0, total6)
+	while (pos10 < total6)
 	{
-		printf("AstError: trailing tokens\n")
-		return 1
+		let next10 = ast_dump_one_function(src, pos10, total6)
+		if (next10 < 0)
+		{
+			return 1
+		}
+		pos10 = ast_skip_ws(src, next10, total6)
 	}
 	return 0
 }

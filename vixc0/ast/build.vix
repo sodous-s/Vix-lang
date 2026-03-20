@@ -1,6 +1,5 @@
 import "base.vix"
 import "pret.vix"
-
 pub fn ast_build_function(src: string, total6: i32, mut out_fn_name_start: & i32, mut out_fn_name_end: & i32, mut out_body_start: & i32, mut out_body_end: & i32, mut out_ret_value: & i32) -> i32
 {
 	if (ast_env_init() != 0)
@@ -52,12 +51,13 @@ pub fn ast_build_function(src: string, total6: i32, mut out_fn_name_start: & i32
 	pos10 += 1
 
 	pos10 = ast_skip_ws(src, pos10, total6)
-	if (pos10 + 1 >= total6 or src[pos10] != '-' or src[pos10 + 1] != '>')
+	let ret_sep_end0 = ast_parse_ret_type_sep(src, pos10, total6)
+	if (ret_sep_end0 < 0)
 	{
-		printf("AstError: expected '->'\n")
+		printf("AstError: expected ':' or '->'\n")
 		return 1
 	}
-	pos10 += 2
+	pos10 = ret_sep_end0
 
 	pos10 = ast_skip_ws(src, pos10, total6)
 	let rt_end0 = ast_parse_ident(src, pos10, total6)
@@ -107,7 +107,11 @@ pub fn ast_build_function(src: string, total6: i32, mut out_fn_name_start: & i32
 		)
 		if (next0 < 0)
 		{
-			break
+			next0 = ast_parse_call_stmt_node(src, scan0, total6)
+			if (next0 < 0)
+			{
+				break
+			}
 		}
 		scan0 = ast_skip_ws(src, next0, total6)
 	}
@@ -141,11 +145,8 @@ pub fn ast_build_function(src: string, total6: i32, mut out_fn_name_start: & i32
 	{
 		return 0
 	}
-	if (ret_pos0 != total6)
-	{
-		printf("AstError: trailing tokens\n")
-		return 1
-	}
+	// Keep codegen entry on the first parsed function while allowing
+	// additional user-defined functions to coexist in the source file.
 	return 0
 }
 
@@ -158,6 +159,14 @@ pub fn ast_next_print_node(src: string, mut io_pos: & i32, body_end: i32, mut ou
 		if (let_next0 >= 0)
 		{
 			p0 = ast_skip_ws(src, let_next0, body_end)
+			@io_pos = p0
+			continue
+		}
+
+		let call_next0 = ast_parse_call_stmt_node(src, p0, body_end)
+		if (call_next0 >= 0)
+		{
+			p0 = ast_skip_ws(src, call_next0, body_end)
 			@io_pos = p0
 			continue
 		}

@@ -238,6 +238,23 @@ pub fn ast_parse_ident(src: string, pos4: i32, total3: i32) -> i32
 	return pos5
 }
 
+pub fn ast_parse_ret_type_sep(src: string, pos0: i32, total0: i32) -> i32
+{
+	if (pos0 >= total0)
+	{
+		return -1
+	}
+	if (src[pos0] == ':')
+	{
+		return pos0 + 1
+	}
+	if (src[pos0] == '-' and pos0 + 1 < total0 and src[pos0 + 1] == '>')
+	{
+		return pos0 + 2
+	}
+	return -1
+}
+
 pub fn ast_parse_number(src: string, pos6: i32, total4: i32) -> i32
 {
 	if (pos6 >= total4 or isdigit(src[pos6]) == 0)
@@ -611,6 +628,72 @@ pub fn ast_parse_print_stmt_node(src: string, pos8: i32, total5: i32, mut out_ki
 		return -1
 	}
 	return c2 + 1
+}
+
+pub fn ast_parse_call_stmt_node(src: string, pos0: i32, total0: i32) -> i32
+{
+	let p0 = ast_skip_ws(src, pos0, total0)
+	let name_e0 = ast_parse_ident(src, p0, total0)
+	if (name_e0 < 0)
+	{
+		return -1
+	}
+
+	let after_name0 = ast_skip_ws(src, name_e0, total0)
+	if (after_name0 >= total0 or src[after_name0] != '(')
+	{
+		return -1
+	}
+
+	let cur0 = ast_skip_ws(src, after_name0 + 1, total0)
+	if (cur0 < total0 and src[cur0] == ')')
+	{
+		return cur0 + 1
+	}
+
+	while (1)
+	{
+		let arg_ty0 = TY_UNKNOWN
+		let arg_i320 = 0
+		let arg_s00 = 0
+		let arg_s10 = 0
+		let arg_end0 = 0
+		if (ast_parse_expr_basic(src, cur0, total0, & arg_ty0, & arg_i320, & arg_s00, & arg_s10, & arg_end0) != 0)
+		{
+			printf("AstError: expected call argument\n")
+			return -1
+		}
+
+		let op_pos0 = ast_skip_ws(src, arg_end0, total0)
+		if (op_pos0 < total0 and (src[op_pos0] == '+' or src[op_pos0] == '*'))
+		{
+			let rhs_ty0 = TY_UNKNOWN
+			let rhs_i320 = 0
+			let rhs_s00 = 0
+			let rhs_s10 = 0
+			let rhs_end0 = 0
+			if (ast_parse_expr_basic(src, op_pos0 + 1, total0, & rhs_ty0, & rhs_i320, & rhs_s00, & rhs_s10, & rhs_end0) != 0)
+			{
+				printf("AstError: expected rhs of call argument\n")
+				return -1
+			}
+			arg_end0 = rhs_end0
+		}
+
+		cur0 = ast_skip_ws(src, arg_end0, total0)
+		if (cur0 < total0 and src[cur0] == ',')
+		{
+			cur0 = ast_skip_ws(src, cur0 + 1, total0)
+			continue
+		}
+		if (cur0 < total0 and src[cur0] == ')')
+		{
+			return cur0 + 1
+		}
+
+		printf("AstError: expected ')' after call args\n")
+		return -1
+	}
 }
 
 pub fn ast_parse_params_core(src: string, pos8: i32, total5: i32, mut out_count: & i32) -> i32

@@ -1,3 +1,5 @@
+import "std/type.vix"
+
 extern "C"
 {
     fn printf(format: ptr, ...) -> i32
@@ -25,22 +27,7 @@ pub type TokenKind = TkKwFn
                | TkRBrace
                | TkUnknown
 
-pub fn isalpha(c) -> i32
-{
-    if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '_')
-    {
-        return 1
-    }
-    return 0
-}
-pub fn isdigit(c) -> i32
-{
-    if (c >= '0' and c <= '9')
-    {
-        return 1
-    }
-    return 0
-}
+
 pub fn isidentchar(c) -> i32
 {
     if (isalpha(c) == 1 or isdigit(c) == 1) {
@@ -167,16 +154,20 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
         if (c == ' ' or c == '\n' or c == '\t' or c == '\r')
         {
             i += 1
+            continue
         }
-        elif (c == '/' and i + 1 < n and src[i + 1] == '/')
+
+        if (c == '/' and i + 1 < n and src[i + 1] == '/')
         {
             i += 2
             while (i < n and src[i] != '\n' and src[i] != 0)
             {
                 i += 1
             }
+            continue
         }
-        elif (c == '/' and i + 1 < n and src[i + 1] == '*')
+
+        if (c == '/' and i + 1 < n and src[i + 1] == '*')
         {
             i += 2
             while (i + 1 < n and (src[i] != '*' or src[i + 1] != '/'))
@@ -187,10 +178,13 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
             {
                 i += 2
             }
+            continue
         }
-        elif (c == '-')
+
+        if (c == '-' )
         {
-            if (i + 1 < n) {
+            if (i + 1 < n)
+            {
                 if (src[i + 1] == '>')
                 {
                     emit_token(TkArrow, src, i, i + 2)
@@ -207,53 +201,57 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
                 emit_token(TkUnknown, src, i, i + 1)
                 i += 1
             }
+            continue
         }
-        elif (c == '(')
+
+        match c
         {
-            emit_token(TkLParen, src, i, i + 1)
-            i += 1
+            '(' -> {
+                emit_token(TkLParen, src, i, i + 1)
+                i += 1
+            }
+            ':' -> {
+                emit_token(TkColon, src, i, i + 1)
+                i += 1
+            }
+            '+' -> {
+                emit_token(TkPlus, src, i, i + 1)
+                i += 1
+            }
+            '*' -> {
+                emit_token(TkStar, src, i, i + 1)
+                i += 1
+            }
+            '=' -> {
+                emit_token(TkAssign, src, i, i + 1)
+                i += 1
+            }
+            ',' -> {
+                emit_token(TkComma, src, i, i + 1)
+                i += 1
+            }
+            ')' -> {
+                emit_token(TkRParen, src, i, i + 1)
+                i += 1
+            }
+            '{' -> {
+                emit_token(TkLBrace, src, i, i + 1)
+                i += 1
+            }
+            '}' -> {
+                emit_token(TkRBrace, src, i, i + 1)
+                i += 1
+            }
+            _ -> {
+            }
+
         }
-        elif (c == ':')
+        if (c == '(' or c == ':' or c == '+' or c == '*' or c == '=' or c == ',' or c == ')' or c == '{' or c == '}')
         {
-            emit_token(TkColon, src, i, i + 1)
-            i += 1
+            continue
         }
-        elif (c == '+')
-        {
-            emit_token(TkPlus, src, i, i + 1)
-            i += 1
-        }
-        elif (c == '*')
-        {
-            emit_token(TkStar, src, i, i + 1)
-            i += 1
-        }
-        elif (c == '=')
-        {
-            emit_token(TkAssign, src, i, i + 1)
-            i += 1
-        }
-        elif (c == ',')
-        {
-            emit_token(TkComma, src, i, i + 1)
-            i += 1
-        }
-        elif (c == ')')
-        {
-            emit_token(TkRParen, src, i, i + 1)
-            i += 1
-        }
-        elif (c == '{')
-        {
-            emit_token(TkLBrace, src, i, i + 1)
-            i += 1
-        }
-        elif (c == '}')
-        {
-            emit_token(TkRBrace, src, i, i + 1)
-            i += 1
-        }
-        elif (isdigit(c) == 1)
+
+        if (isdigit(c) == 1)
         {
             let start = i
             let has_dot = 0
@@ -278,8 +276,10 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
             {
                 emit_token(TkNumber, src, start, i)
             }
+            continue
         }
-        elif (c == '"')
+
+        if (c == '"')
         {
             let str_start = i
             i += 1
@@ -299,8 +299,10 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
                 i += 1
             }
             emit_token(TkString, src, str_start, i)
+            continue
         }
-        elif (isalpha(c) == 1)
+
+        if (isalpha(c) == 1)
         {
             start = i
             while (i < n and isidentchar(src[i]) == 1)
@@ -309,12 +311,11 @@ pub fn lexer_with_len(src: string, n: i32) -> i32
             }
             let ident_kind = classify_ident_kind(src, start, i)
             emit_token(ident_kind, src, start, i)
+            continue
         }
-        else
-        {
-            emit_token(TkUnknown, src, i, i + 1)
-            i += 1
-        }
+
+        emit_token(TkUnknown, src, i, i + 1)
+        i += 1
     }
 
     return 0

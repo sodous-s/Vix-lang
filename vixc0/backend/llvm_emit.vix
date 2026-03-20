@@ -1,5 +1,4 @@
-import "../ast_build.vix"
-
+import "../ast/build.vix"
 extern "C"
 {
 	fn printf(format: ptr, ...) -> i32
@@ -322,6 +321,12 @@ pub fn emit(src: ptr, src_len: i32, out_ll_path: ptr) -> i32
 				free(call_args1)
 			}
 		}
+		/*let call_next0 = ast_parse_call_stmt_node(src, scan0, total0)
+		if (call_next0 >= 0)
+		{
+			scan0 = ast_skip_ws(src, call_next0, total0)
+			continue
+		}*/
 	}
 
 	let const_ret0 = LLVMConstInt(i32_ty0, ret_value0, 1)

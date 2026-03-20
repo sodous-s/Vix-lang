@@ -1,15 +1,10 @@
-fn main() ->i32
+fn main(): i32
 {
-    let x = 10
-    let y = 3.14
-    let z = x + y
-    let h = x * y 
-    let b = true
-    let s = "string"
-    /*print(x)
-    print(y)
-    print(z)
-    print(h)
-    print(s)*/
+    print("Hello world")
+    add(1,2)
     return 0
+}
+fn add(a: i32, b: i32): i32
+{
+    return a + b
 }

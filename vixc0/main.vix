@@ -1,3 +1,4 @@
+import "std/type.vix"
 import "lexer.vix"
 import "typeinfer.vix"
 import "ast/base.vix"
@@ -5,6 +6,7 @@ import "ast/pret.vix"
 import "ast/build.vix"
 import "parser.vix"
 import "backend/llvm_emit.vix"
+//import "lib/llvm.vix"
 import "../src/std/strings.vix"
 extern "C"
 {
