@@ -204,10 +204,8 @@ pub fn emit(src: ptr, src_len: i32, out_ll_path: ptr) -> i32
 
 	let td0 = LLVMCreateTargetDataLayout(tm0)
 	let layout_str0 = LLVMCopyStringRepOfTargetData(td0)
-
 	LLVMSetTarget(module0, triple0)
 	LLVMSetDataLayout(module0, layout_str0)
-
 	LLVMDisposeMessage(layout_str0)
 	LLVMDisposeTargetData(td0)
 	LLVMDisposeTargetMachine(tm0)

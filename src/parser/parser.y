@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "../include/ast.h"
 #include "../include/compiler.h"
 extern int yylex();
@@ -18,6 +19,85 @@ static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc);
 static ASTNode* build_type_alias_enum(const char* type_name, ASTNode* variants);
 static ASTNode* mark_type_alias_public(ASTNode* program);
 static ASTNode* build_match_desugared(ASTNode* scrutinee, ASTNode* arms);
+
+typedef enum {
+    GENERIC_KIND_FUNCTION = 0,
+    GENERIC_KIND_STRUCT = 1,
+    GENERIC_KIND_TYPE = 2
+} GenericKind;
+
+typedef struct {
+    char* name;
+    GenericKind kind;
+    int arity;
+} GenericArityEntry;
+
+static GenericArityEntry g_generic_arities[512];
+static int g_generic_arity_count = 0;
+
+static int node_list_count(ASTNode* list) {
+    if (!list || list->type != AST_EXPRESSION_LIST) return 0;
+    return list->data.expression_list.expression_count;
+}
+
+static int find_generic_arity_index(const char* name, GenericKind kind) {
+    if (!name) return -1;
+    for (int i = 0; i < g_generic_arity_count; i++) {
+        if (g_generic_arities[i].kind == kind &&
+            g_generic_arities[i].name &&
+            strcmp(g_generic_arities[i].name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static void register_generic_arity(const char* name, GenericKind kind, int arity) {
+    if (!name) return;
+    int idx = find_generic_arity_index(name, kind);
+    if (idx >= 0) {
+        g_generic_arities[idx].arity = arity;
+        return;
+    }
+    if (g_generic_arity_count >= (int)(sizeof(g_generic_arities) / sizeof(g_generic_arities[0]))) {
+        return;
+    }
+    g_generic_arities[g_generic_arity_count].name = strdup(name);
+    g_generic_arities[g_generic_arity_count].kind = kind;
+    g_generic_arities[g_generic_arity_count].arity = arity;
+    g_generic_arity_count++;
+}
+
+static int lookup_generic_arity(const char* name, GenericKind kind, int* found) {
+    int idx = find_generic_arity_index(name, kind);
+    if (idx < 0) {
+        if (found) *found = 0;
+        return 0;
+    }
+    if (found) *found = 1;
+    return g_generic_arities[idx].arity;
+}
+
+static void check_generic_arity_usage(const char* name, GenericKind kind, ASTNode* type_args, YYLTYPE* loc) {
+    int found = 0;
+    int expected = lookup_generic_arity(name, kind, &found);
+    if (!found) return;
+
+    int actual = node_list_count(type_args);
+    if (expected == actual) return;
+
+    char msg[256];
+    const char* what = (kind == GENERIC_KIND_FUNCTION) ? "function" :
+                       (kind == GENERIC_KIND_STRUCT) ? "struct" : "type";
+    snprintf(msg, sizeof(msg),
+             "Generic %s '%s' expects %d type argument(s), but got %d",
+             what, name ? name : "<unknown>", expected, actual);
+
+    int line = (loc && loc->first_line > 0) ? loc->first_line : yylineno;
+    int col = (loc && loc->first_column > 0) ? loc->first_column : 1;
+    set_location_with_column(current_input_filename ? current_input_filename : "unknown", line, col);
+    report_simple_error(ERROR_LEVEL_ERROR, ERROR_SEMANTIC, msg);
+}
 
 static ASTNode* create_default_scalar_value(ASTNode* type_node, YYLTYPE* loc) {
     if (!type_node) {
@@ -229,6 +309,7 @@ build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
 %type <node> block_statement if_rest expression_list
 %type <node> lvalue
 %type <node> type_definition enum_variant_list match_statement match_arms match_arm match_arm_body match_target match_arm_pattern
+%type <node> generic_param_list generic_type_args enum_variant
 
 %nonassoc IF
 %nonassoc ELSE
@@ -367,9 +448,22 @@ statement
     | pub_function_definition           { $$ = $1; }
     | function_definition           { $$ = $1; }
     | extern_block                 { $$ = $1; }
-    | STRUCT IDENTIFIER LBRACE struct_fields RBRACE { $$ = create_struct_def_node_with_yyltype($2, $4, (YYLTYPE*) &@$); }
+    | STRUCT IDENTIFIER LBRACE struct_fields RBRACE {
+        register_generic_arity($2, GENERIC_KIND_STRUCT, 0);
+        $$ = create_struct_def_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
+    }
+    | STRUCT IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LBRACE struct_fields RBRACE {
+        register_generic_arity($2, GENERIC_KIND_STRUCT, node_list_count($5));
+        $$ = create_struct_def_node_with_yyltype($2, $8, (YYLTYPE*) &@$);
+    }
     | PUB STRUCT IDENTIFIER LBRACE struct_fields RBRACE {
+        register_generic_arity($3, GENERIC_KIND_STRUCT, 0);
         $$ = create_struct_def_node_with_yyltype($3, $5, (YYLTYPE*) &@$);
+        $$->data.struct_def.is_public = 1;
+    }
+    | PUB STRUCT IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LBRACE struct_fields RBRACE {
+        register_generic_arity($3, GENERIC_KIND_STRUCT, node_list_count($6));
+        $$ = create_struct_def_node_with_yyltype($3, $9, (YYLTYPE*) &@$);
         $$->data.struct_def.is_public = 1;
     }
     | type_definition              { $$ = $1; }
@@ -411,21 +505,64 @@ statement
 
 type_definition
     : TYPE_KW IDENTIFIER ASSIGN enum_variant_list {
+        register_generic_arity($2, GENERIC_KIND_TYPE, 0);
         $$ = build_type_alias_enum($2, $4);
     }
     | PUB TYPE_KW IDENTIFIER ASSIGN enum_variant_list {
+        register_generic_arity($3, GENERIC_KIND_TYPE, 0);
         $$ = mark_type_alias_public(build_type_alias_enum($3, $5));
+    }
+    | TYPE_KW IDENTIFIER COLON LBRACKET generic_param_list RBRACKET ASSIGN enum_variant_list {
+        register_generic_arity($2, GENERIC_KIND_TYPE, node_list_count($5));
+        $$ = build_type_alias_enum($2, $8);
+    }
+    | PUB TYPE_KW IDENTIFIER COLON LBRACKET generic_param_list RBRACKET ASSIGN enum_variant_list {
+        register_generic_arity($3, GENERIC_KIND_TYPE, node_list_count($6));
+        $$ = mark_type_alias_public(build_type_alias_enum($3, $9));
     }
     ;
 
 enum_variant_list
+    : enum_variant {
+        ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(list, $1);
+        $$ = list;
+    }
+    | enum_variant_list PIPE enum_variant {
+        add_expression_to_list($1, $3);
+        $$ = $1;
+    }
+    ;
+
+enum_variant
+    : IDENTIFIER {
+        $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+    }
+    | IDENTIFIER LPAREN type RPAREN {
+        $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+    }
+    ;
+
+generic_param_list
     : IDENTIFIER {
         ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
         add_expression_to_list(list, create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$));
         $$ = list;
     }
-    | enum_variant_list PIPE IDENTIFIER {
+    | generic_param_list COMMA IDENTIFIER {
         add_expression_to_list($1, create_identifier_node_with_yyltype($3, (YYLTYPE*) &@$));
+        $$ = $1;
+    }
+    ;
+
+generic_type_args
+    : type {
+        ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(list, $1);
+        $$ = list;
+    }
+    | generic_type_args COMMA type {
+        add_expression_to_list($1, $3);
         $$ = $1;
     }
     ;
@@ -480,7 +617,10 @@ input_expression
     }
     ;
 struct_field
-    : IDENTIFIER COLON type { $$ = create_assign_node_with_yyltype(create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$), $3, (YYLTYPE*) &@$); }
+    : IDENTIFIER COLON type {
+        $$ = create_assign_node_with_yyltype(create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$), $3, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 2;
+    }
     ;
 
 struct_fields
@@ -521,6 +661,11 @@ type
     | IDENTIFIER {
         $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); 
     }
+    | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET {
+        check_generic_arity_usage($1, GENERIC_KIND_STRUCT, $4, (YYLTYPE*) &@$);
+        check_generic_arity_usage($1, GENERIC_KIND_TYPE, $4, (YYLTYPE*) &@$);
+        $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+    }
     ;
 
 param_list
@@ -528,6 +673,7 @@ param_list
     | identifier COLON type {
         ASTNode* id_node = create_identifier_node_with_yyltype($1->data.identifier.name, (YYLTYPE*) &@$);
         ASTNode* annotated_param = create_assign_node_with_yyltype(id_node, $3, (YYLTYPE*) &@$);
+        annotated_param->data.assign.is_declaration = 2;
         ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
         add_expression_to_list(list, annotated_param);
         $$ = list;
@@ -542,6 +688,7 @@ param_list
         ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
         ASTNode* id_node = create_identifier_node_with_yyltype($2->data.identifier.name, (YYLTYPE*) &@$);
         ASTNode* annotated_param = create_assign_node_with_mutability(id_node, $4, MUTABILITY_MUTABLE);
+        annotated_param->data.assign.is_declaration = 2;
         add_expression_to_list(list, annotated_param);
         $$ = list;
     }
@@ -549,6 +696,7 @@ param_list
     | param_list COMMA identifier COLON type {
         ASTNode* id_node = create_identifier_node_with_yyltype($3->data.identifier.name, (YYLTYPE*) &@$);
         ASTNode* annotated_param = create_assign_node_with_yyltype(id_node, $5, (YYLTYPE*) &@$);
+        annotated_param->data.assign.is_declaration = 2;
         add_expression_to_list($1, annotated_param);
         $$ = $1;
     }
@@ -560,6 +708,7 @@ param_list
     | param_list COMMA MUT identifier COLON type {
         ASTNode* id_node = create_identifier_node_with_yyltype($4->data.identifier.name, (YYLTYPE*) &@$);
         ASTNode* annotated_param = create_assign_node_with_mutability(id_node, $6, MUTABILITY_MUTABLE);
+        annotated_param->data.assign.is_declaration = 2;
         add_expression_to_list($1, annotated_param);
         $$ = $1;
     }
@@ -572,38 +721,86 @@ function_return_type
 
 pub_function_definition
     : PUB FN IDENTIFIER LPAREN RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, 0);
         $$ = create_public_function_node($3, NULL, $6, $8);
     }
     | PUB FN IDENTIFIER LPAREN param_list RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, 0);
         $$ = create_public_function_node($3, $5, $7, $9);
     }
     | PUB FN IDENTIFIER LPAREN RPAREN LBRACE statement_list RBRACE {
         ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, 0);
         $$ = create_public_function_node($3, NULL, void_type, $7);
     }
     | PUB FN IDENTIFIER LPAREN param_list RPAREN LBRACE statement_list RBRACE {
         ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, 0);
         $$ = create_public_function_node($3, $5, void_type, $8);
+    }
+    | PUB FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, node_list_count($6));
+        $$ = create_public_function_node($3, NULL, $10, $12);
+    }
+    | PUB FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN param_list RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, node_list_count($6));
+        $$ = create_public_function_node($3, $9, $11, $13);
+    }
+    | PUB FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN RPAREN LBRACE statement_list RBRACE {
+        ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, node_list_count($6));
+        $$ = create_public_function_node($3, NULL, void_type, $11);
+    }
+    | PUB FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN param_list RPAREN LBRACE statement_list RBRACE {
+        ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($3, GENERIC_KIND_FUNCTION, node_list_count($6));
+        $$ = create_public_function_node($3, $9, void_type, $12);
     }
     ;
 
 function_definition
     : FN IDENTIFIER LPAREN RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, 0);
         $$ = create_function_node($2, NULL, $5, $7);
         $$->data.function.is_public = 0;
     }
     | FN IDENTIFIER LPAREN param_list RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, 0);
         $$ = create_function_node($2, $4, $6, $8);
         $$->data.function.is_public = 0;
     }
     | FN IDENTIFIER LPAREN RPAREN LBRACE statement_list RBRACE {
         ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, 0);
         $$ = create_function_node($2, NULL, void_type, $6);
         $$->data.function.is_public = 0;
     }
     | FN IDENTIFIER LPAREN param_list RPAREN LBRACE statement_list RBRACE {
         ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, 0);
         $$ = create_function_node($2, $4, void_type, $7);
+        $$->data.function.is_public = 0;
+    }
+    | FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, node_list_count($5));
+        $$ = create_function_node($2, NULL, $9, $11);
+        $$->data.function.is_public = 0;
+    }
+    | FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN param_list RPAREN function_return_type LBRACE statement_list RBRACE {
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, node_list_count($5));
+        $$ = create_function_node($2, $8, $10, $12);
+        $$->data.function.is_public = 0;
+    }
+    | FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN RPAREN LBRACE statement_list RBRACE {
+        ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, node_list_count($5));
+        $$ = create_function_node($2, NULL, void_type, $10);
+        $$->data.function.is_public = 0;
+    }
+    | FN IDENTIFIER COLON LBRACKET generic_param_list RBRACKET LPAREN param_list RPAREN LBRACE statement_list RBRACE {
+        ASTNode* void_type = create_type_node(AST_TYPE_VOID);
+        register_generic_arity($2, GENERIC_KIND_FUNCTION, node_list_count($5));
+        $$ = create_function_node($2, $8, void_type, $11);
         $$->data.function.is_public = 0;
     }
     ;
@@ -828,8 +1025,29 @@ factor_unary
         ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); 
         $$ = create_call_node_with_yyltype(id, $3, (YYLTYPE*) &@$); 
     }
+    | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET LPAREN RPAREN {
+        check_generic_arity_usage($1, GENERIC_KIND_FUNCTION, $4, (YYLTYPE*) &@$);
+        ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        $$ = create_call_node_with_yyltype(id, NULL, (YYLTYPE*) &@$);
+    }
+    | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET LPAREN expression_list RPAREN {
+        check_generic_arity_usage($1, GENERIC_KIND_FUNCTION, $4, (YYLTYPE*) &@$);
+        ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        $$ = create_call_node_with_yyltype(id, $7, (YYLTYPE*) &@$);
+    }
     | IDENTIFIER LBRACE RBRACE { ASTNode* type_id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$); $$ = create_struct_literal_node_with_yyltype(type_id, list, (YYLTYPE*) &@$); }
     | IDENTIFIER LBRACE struct_init_fields RBRACE { ASTNode* type_id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); $$ = create_struct_literal_node_with_yyltype(type_id, $3, (YYLTYPE*) &@$); }
+    | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET LBRACE RBRACE {
+        check_generic_arity_usage($1, GENERIC_KIND_STRUCT, $4, (YYLTYPE*) &@$);
+        ASTNode* type_id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        $$ = create_struct_literal_node_with_yyltype(type_id, list, (YYLTYPE*) &@$);
+    }
+    | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET LBRACE struct_init_fields RBRACE {
+        check_generic_arity_usage($1, GENERIC_KIND_STRUCT, $4, (YYLTYPE*) &@$);
+        ASTNode* type_id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        $$ = create_struct_literal_node_with_yyltype(type_id, $7, (YYLTYPE*) &@$);
+    }
     | literal                       { $$ = $1; }
     | identifier                    { $$ = $1; }
     | toint_expression              { $$ = $1; }

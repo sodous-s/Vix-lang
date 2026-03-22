@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+
+extern char* realpath(const char* path, char* resolved_path);
 
 #ifdef HAVE_PARSER_TAB_H//tips : 别删，用来取消警告
 #include "../parser/parser.tab.h"//tips : 这个头文件按编译顺序编译
@@ -11,6 +14,112 @@ extern ASTNode* root; //tips : 根节点
 extern const char* current_input_filename;
 extern int yyparse(void);
 extern int yylineno;
+
+typedef struct ImportedModuleNode {
+    char* canonical_path;
+    struct ImportedModuleNode* next;
+} ImportedModuleNode;
+
+static ImportedModuleNode* g_imported_module_cache = NULL;
+
+static int canonicalize_existing_path(const char* path, char* out, size_t out_size) {
+    if (!path || !out || out_size == 0) return 0;
+
+    char resolved[1024];
+    if (realpath(path, resolved) != NULL) {
+        strncpy(out, resolved, out_size - 1);
+        out[out_size - 1] = '\0';
+        return 1;
+    }
+
+    strncpy(out, path, out_size - 1);
+    out[out_size - 1] = '\0';
+    return 1;
+}
+
+static int resolve_import_path(const char* current_file, const char* module_path, char* out, size_t out_size) {
+    if (!module_path || !out || out_size == 0) return 0;
+
+    char candidate[1024];
+    if (module_path[0] == '/') {
+        strncpy(candidate, module_path, sizeof(candidate) - 1);
+        candidate[sizeof(candidate) - 1] = '\0';
+    } else {
+        const char* current = current_file ? current_file : ".";
+        char dir_path[1024];
+        strncpy(dir_path, current, sizeof(dir_path) - 1);
+        dir_path[sizeof(dir_path) - 1] = '\0';
+        char* last_slash = strrchr(dir_path, '/');
+        if (last_slash) {
+            *(last_slash + 1) = '\0';
+        } else {
+            strcpy(dir_path, "./");
+        }
+        snprintf(candidate, sizeof(candidate), "%s%s", dir_path, module_path);
+    }
+
+    return canonicalize_existing_path(candidate, out, out_size);
+}
+
+static int import_cache_contains(const char* canonical_path) {
+    if (!canonical_path) return 0;
+    ImportedModuleNode* cur = g_imported_module_cache;
+    while (cur) {
+        if (cur->canonical_path && strcmp(cur->canonical_path, canonical_path) == 0) {
+            return 1;
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+static void import_cache_add(const char* canonical_path) {
+    if (!canonical_path || import_cache_contains(canonical_path)) return;
+
+    ImportedModuleNode* node = malloc(sizeof(ImportedModuleNode));
+    if (!node) return;
+    node->canonical_path = strdup(canonical_path);
+    if (!node->canonical_path) {
+        free(node);
+        return;
+    }
+    node->next = g_imported_module_cache;
+    g_imported_module_cache = node;
+}
+
+static void clear_import_cache(void) {
+    ImportedModuleNode* cur = g_imported_module_cache;
+    while (cur) {
+        ImportedModuleNode* next = cur->next;
+        free(cur->canonical_path);
+        free(cur);
+        cur = next;
+    }
+    g_imported_module_cache = NULL;
+}
+
+static void remove_program_statement_at(ASTNode* program, int idx) {
+    if (!program || program->type != AST_PROGRAM) return;
+    if (idx < 0 || idx >= program->data.program.statement_count) return;
+
+    free_ast(program->data.program.statements[idx]);
+
+    for (int k = idx + 1; k < program->data.program.statement_count; k++) {
+        program->data.program.statements[k - 1] = program->data.program.statements[k];
+    }
+
+    program->data.program.statement_count--;
+    if (program->data.program.statement_count == 0) {
+        free(program->data.program.statements);
+        program->data.program.statements = NULL;
+    } else {
+        ASTNode** resized = realloc(program->data.program.statements,
+                                    sizeof(ASTNode*) * program->data.program.statement_count);
+        if (resized) {
+            program->data.program.statements = resized;
+        }
+    }
+}
 
 static void set_source_file_recursive(ASTNode* node, const char* source_file) {
     if (!node) return;
@@ -1776,25 +1885,24 @@ static void inline_imports_in_node(ASTNode* node) {
 
             if (stmt->type == AST_IMPORT) {
                 const char* module_path = stmt->data.import.module_path;
-                const char* current = current_input_filename ? current_input_filename : ".";
-                char dir_path[1024];
-                strncpy(dir_path, current, sizeof(dir_path) - 1);
-                dir_path[sizeof(dir_path) - 1] = '\0';
-                char* last_slash = strrchr(dir_path, '/');
-                if (last_slash) {
-                    *(last_slash + 1) = '\0';
-                } else {
-                    strcpy(dir_path, "./");
+                char full_module_path[1024];
+                if (!resolve_import_path(current_input_filename, module_path, full_module_path, sizeof(full_module_path))) {
+                    i++;
+                    continue;
                 }
 
-                char full_module_path[1024];
-                snprintf(full_module_path, sizeof(full_module_path), "%s%s", dir_path, module_path);
+                if (import_cache_contains(full_module_path)) {
+                    remove_program_statement_at(node, i);
+                    continue;
+                }
 
                 FILE* f = fopen(full_module_path, "r");
                 if (!f) {
                     i++;
                     continue;
                 }
+
+                import_cache_add(full_module_path);
 
                 FILE* old_yyin = yyin;
                 ASTNode* old_root = root;
@@ -2020,7 +2128,15 @@ static void inline_imports_in_node(ASTNode* node) {
 }
 
 void inline_imports(ASTNode* node) {
+    clear_import_cache();
+    if (current_input_filename) {
+        char root_file[1024];
+        if (canonicalize_existing_path(current_input_filename, root_file, sizeof(root_file))) {
+            import_cache_add(root_file);
+        }
+    }
     inline_imports_in_node(node);
+    clear_import_cache();
 }
 
 int get_array_length(ASTNode* node) {

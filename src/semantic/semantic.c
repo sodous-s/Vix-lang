@@ -416,6 +416,7 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
         case AST_ASSIGN: {
             int in_struct_def_field = is_node_struct_field_assignment(node, new_visited_list);
             int in_struct_literal_field = is_node_inside_struct_literal(node, new_visited_list);
+            int is_type_annotation = (node->data.assign.is_declaration == 2);
 
             if (node->data.assign.left && 
                 node->data.assign.left->type == AST_UNARYOP && 
@@ -480,6 +481,9 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                 }
             }
             if (node->data.assign.right) {
+                if (is_type_annotation) {
+                    break;
+                }
                 if (in_struct_def_field) {
                     if (node->data.assign.right->type == AST_IDENTIFIER) {
                         const char* type_name = node->data.assign.right->data.identifier.name;

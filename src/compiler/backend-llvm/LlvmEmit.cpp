@@ -544,8 +544,27 @@ private:
     bool mainFunctionCreated;
     SourceAttrInfo sourceAttrs;
     std::map<std::string, std::vector<int>> functionArrayParamPositions;
+    std::map<std::string, StructType*> functionSRetResultTypesByName;
+    std::map<Function*, StructType*> functionSRetResultTypesByFunc;
     std::vector<BasicBlock*> loopBreakTargets;
     std::vector<BasicBlock*> loopContinueTargets;
+
+    bool usesStructSRet(Function* func) const {
+        if (!func) return false;
+        return functionSRetResultTypesByFunc.find(func) != functionSRetResultTypesByFunc.end();
+    }
+
+    StructType* getStructSRetType(Function* func) const {
+        if (!func) return nullptr;
+        auto it = functionSRetResultTypesByFunc.find(func);
+        return it != functionSRetResultTypesByFunc.end() ? it->second : nullptr;
+    }
+
+    void registerStructSRetFunction(const std::string& funcName, Function* func, StructType* structType) {
+        if (!func || !structType) return;
+        functionSRetResultTypesByName[funcName] = structType;
+        functionSRetResultTypesByFunc[func] = structType;
+    }
     
     bool ensureValidInsertPoint() {
         BasicBlock* currentBB = builder.GetInsertBlock();
@@ -1622,6 +1641,51 @@ public:
         VisitResult rightVal = visit(node->data.assign.right);
         if (!rightVal.value) return VisitResult();
 
+        if (rightVal.structType && rightVal.value->getType()->isPointerTy()) {
+            AllocaInst* structAlloc = scopeManager.findVariable(name);
+            if (!structAlloc) {
+                structAlloc = findVariableInMain(name);
+                if (structAlloc) {
+                    scopeManager.defineVariable(name, structAlloc);
+                }
+            }
+
+            if (!structAlloc) {
+                Function* func = getCurrentFunction();
+                if (!func) {
+                    func = module->getFunction("main");
+                    if (!func) {
+                        createDefaultMain();
+                        func = module->getFunction("main");
+                    }
+                }
+                if (!func) return VisitResult();
+
+                BasicBlock* entryBB = &func->getEntryBlock();
+                BasicBlock* savedBB = builder.GetInsertBlock();
+                IRBuilder<> tempBuilder(entryBB, entryBB->begin());
+                structAlloc = tempBuilder.CreateAlloca(rightVal.structType, nullptr, name);
+                if (savedBB) {
+                    builder.SetInsertPoint(savedBB);
+                }
+                scopeManager.defineVariable(name, structAlloc);
+            }
+
+            Type* dstType = getActualType(structAlloc);
+            if (!dstType || dstType != rightVal.structType) {
+                return VisitResult();
+            }
+
+            Value* srcPtr = rightVal.value;
+            Type* expectPtrType = PointerType::getUnqual(rightVal.structType);
+            if (srcPtr->getType() != expectPtrType) {
+                srcPtr = builder.CreateBitCast(srcPtr, expectPtrType, "ret_struct_ptrcast");
+            }
+            Value* srcValue = builder.CreateLoad(rightVal.structType, srcPtr, name + "_ret_struct_val");
+            builder.CreateStore(srcValue, structAlloc);
+            return VisitResult(structAlloc, ValueType::POINTER, rightVal.structType);
+        }
+
         Type* inferredPointerElementType = nullptr;
         if (node->data.assign.right->type == AST_UNARYOP &&
             node->data.assign.right->data.unaryop.op == OP_ADDRESS) {
@@ -2303,6 +2367,10 @@ public:
         std::string funcName(node->data.function.name);
         
         if (Function* existingFunc = module->getFunction(funcName)) {
+            StructType* sretStructType = getStructSRetType(existingFunc);
+            if (sretStructType) {
+                return VisitResult(existingFunc, ValueType::POINTER, sretStructType);
+            }
             return VisitResult(existingFunc, typeHelper.fromLLVMType(existingFunc->getReturnType()));
         }
         
@@ -2410,15 +2478,30 @@ public:
                 }
             }
         }
-        Type* returnType = Type::getVoidTy(context);
+        Type* logicalReturnType = Type::getVoidTy(context);
         ValueType returnValueType = ValueType::VOID;
         if (node->data.function.return_type) {
-            returnType = typeHelper.getTypeFromTypeNode(node->data.function.return_type);
-            returnValueType = typeHelper.getValueTypeFromType(returnType);
+            logicalReturnType = typeHelper.getTypeFromTypeNode(node->data.function.return_type);
+            returnValueType = typeHelper.getValueTypeFromType(logicalReturnType);
         }
+
+        StructType* logicalReturnStructType = nullptr;
+        bool useStructSRet = logicalReturnType && logicalReturnType->isStructTy();
+        Type* abiReturnType = logicalReturnType;
+        if (useStructSRet) {
+            logicalReturnStructType = cast<StructType>(logicalReturnType);
+            abiReturnType = Type::getVoidTy(context);
+            paramTypes.insert(paramTypes.begin(), PointerType::getUnqual(logicalReturnStructType));
+        }
+
         bool isVarArg = node->data.function.vararg == 1;
-        FunctionType* funcType = FunctionType::get(returnType, paramTypes, isVarArg);
+        FunctionType* funcType = FunctionType::get(abiReturnType, paramTypes, isVarArg);
         Function* func = Function::Create(funcType, Function::ExternalLinkage, funcName, module.get());
+        if (useStructSRet && logicalReturnStructType) {
+            registerStructSRetFunction(funcName, func, logicalReturnStructType);
+            func->addParamAttr(0, Attribute::StructRet);
+            func->addParamAttr(0, Attribute::NoAlias);
+        }
         auto fit = sourceAttrs.functionAttrs.find(funcName);
         if (fit != sourceAttrs.functionAttrs.end()) {
             if (!fit->second.section.empty()) {
@@ -2429,7 +2512,7 @@ public:
             }
         }//对于声明但未定义的外部函数，直接返回函数对象，不生成函数体
         if (node->data.function.is_extern && node->data.function.body == NULL) {
-            return VisitResult(func, returnValueType);
+            return VisitResult(func, returnValueType, logicalReturnStructType);
         }
         
         if (funcName == "main") {
@@ -2441,17 +2524,25 @@ public:
         builder.SetInsertPoint(entryBB);
         scopeManager.enterScope();
         unsigned idx = 0;
+        unsigned userIdx = 0;
         for (auto& arg : func->args()) {
-            if (idx < paramNames.size()) {
-                arg.setName(paramNames[idx]);
+            if (useStructSRet && idx == 0) {
+                arg.setName("__sret");
+                ++idx;
+                continue;
+            }
+
+            if (userIdx < paramNames.size()) {
+                arg.setName(paramNames[userIdx]);
                 Type* paramAllocType = arg.getType();
                 
-                AllocaInst* alloc = builder.CreateAlloca(paramAllocType, nullptr, paramNames[idx]);
+                AllocaInst* alloc = builder.CreateAlloca(paramAllocType, nullptr, paramNames[userIdx]);
                 builder.CreateStore(&arg, alloc);
-                scopeManager.defineVariable(paramNames[idx], alloc);
-                if (idx < paramValueTypes.size() && paramValueTypes[idx] == ValueType::STRING) {
-                    typeHelper.registerStringVariable(paramNames[idx]);
+                scopeManager.defineVariable(paramNames[userIdx], alloc);
+                if (userIdx < paramValueTypes.size() && paramValueTypes[userIdx] == ValueType::STRING) {
+                    typeHelper.registerStringVariable(paramNames[userIdx]);
                 }
+                userIdx++;
             }
             ++idx;
         }
@@ -2482,20 +2573,20 @@ public:
             }
         }
         builder.SetInsertPoint(endBB);
-        if (returnType->isVoidTy()) {
+        if (useStructSRet || logicalReturnType->isVoidTy()) {
             builder.CreateRetVoid();
         } else {
             Value* defaultRetVal = nullptr;
-            if (returnType->isIntegerTy()) {
-                defaultRetVal = ConstantInt::get(returnType, 0);
-            } else if (returnType->isFloatTy()) {
-                defaultRetVal = ConstantFP::get(returnType, 0.0);
-            } else if (returnType->isDoubleTy()) {
-                defaultRetVal = ConstantFP::get(returnType, 0.0);
-            } else if (returnType->isPointerTy()) {
-                defaultRetVal = ConstantPointerNull::get(cast<PointerType>(returnType));
+            if (logicalReturnType->isIntegerTy()) {
+                defaultRetVal = ConstantInt::get(logicalReturnType, 0);
+            } else if (logicalReturnType->isFloatTy()) {
+                defaultRetVal = ConstantFP::get(logicalReturnType, 0.0);
+            } else if (logicalReturnType->isDoubleTy()) {
+                defaultRetVal = ConstantFP::get(logicalReturnType, 0.0);
+            } else if (logicalReturnType->isPointerTy()) {
+                defaultRetVal = ConstantPointerNull::get(cast<PointerType>(logicalReturnType));
             } else {
-                defaultRetVal = ConstantInt::get(returnType, 0);
+                defaultRetVal = Constant::getNullValue(logicalReturnType);
             }
             builder.CreateRet(defaultRetVal);
         }
@@ -2521,11 +2612,12 @@ public:
         int actualParamCount = node->data.call.args ? 
             node->data.call.args->data.expression_list.expression_count : 0;
         int hiddenArrayLenParamCount = 0;
+        int hiddenSRetParamCount = usesStructSRet(callee) ? 1 : 0;
         auto arrayMetaIt = functionArrayParamPositions.find(calleeName);
         if (arrayMetaIt != functionArrayParamPositions.end()) {
             hiddenArrayLenParamCount = (int)arrayMetaIt->second.size();
         }
-        int expectedUserParamCount = expectedParamCount - hiddenArrayLenParamCount;
+        int expectedUserParamCount = expectedParamCount - hiddenArrayLenParamCount - hiddenSRetParamCount;
         bool isVarArg = callee->getFunctionType()->isVarArg();
         bool isKnownVarArgFunc = (calleeName == "printf" || calleeName == "sprintf" ||
                                   calleeName == "snprintf" || calleeName == "scanf");
@@ -2539,6 +2631,31 @@ public:
         
         std::vector<Value*> args;
         int llvmParamIndex = 0;
+        StructType* sretType = getStructSRetType(callee);
+        AllocaInst* sretAlloc = nullptr;
+        if (sretType) {
+            Function* caller = getCurrentFunction();
+            if (!caller) {
+                caller = module->getFunction("main");
+                if (!caller) {
+                    createDefaultMain();
+                    caller = module->getFunction("main");
+                }
+            }
+            if (!caller) return VisitResult();
+
+            BasicBlock* entryBB = &caller->getEntryBlock();
+            BasicBlock* savedBB = builder.GetInsertBlock();
+            IRBuilder<> tmpBuilder(entryBB, entryBB->begin());
+            sretAlloc = tmpBuilder.CreateAlloca(sretType, nullptr, calleeName + "_ret");
+            if (savedBB) {
+                builder.SetInsertPoint(savedBB);
+            }
+
+            args.push_back(sretAlloc);
+            llvmParamIndex = 1;
+        }
+
         if (node->data.call.args) {
             for (int i = 0; i < actualParamCount; i++) {
                 ASTNode* argNode = node->data.call.args->data.expression_list.expressions[i];
@@ -2608,6 +2725,9 @@ public:
         }
         
         CallInst* callInst = builder.CreateCall(callee, args);
+        if (sretAlloc) {
+            return VisitResult(sretAlloc, ValueType::POINTER, sretType);
+        }
         if (!callee->getReturnType()->isVoidTy()) callInst->setName("calltmp");
         ValueType returnType = typeHelper.getValueTypeFromType(callee->getReturnType());
         return VisitResult(callInst, returnType);
@@ -2618,6 +2738,45 @@ public:
         if (!currentFunc) return VisitResult();
         
         Type* expectedReturnType = currentFunc->getReturnType();
+        StructType* sretType = getStructSRetType(currentFunc);
+
+        if (sretType) {
+            Argument* sretArg = currentFunc->arg_begin();
+            Value* sretPtr = sretArg;
+            Type* expectSretPtrType = PointerType::getUnqual(sretType);
+            if (sretPtr->getType() != expectSretPtrType) {
+                sretPtr = builder.CreateBitCast(sretPtr, expectSretPtrType, "sret_ptrcast");
+            }
+
+            if (node->data.return_stmt.expr) {
+                VisitResult retVal = visit(node->data.return_stmt.expr);
+                if (!retVal.value) return VisitResult();
+
+                Value* retStructValue = nullptr;
+                if (retVal.value->getType() == sretType) {
+                    retStructValue = retVal.value;
+                } else if (retVal.value->getType()->isPointerTy()) {
+                    Value* srcPtr = retVal.value;
+                    Type* expectSrcPtrType = PointerType::getUnqual(sretType);
+                    if (srcPtr->getType() != expectSrcPtrType) {
+                        srcPtr = builder.CreateBitCast(srcPtr, expectSrcPtrType, "ret_sret_src_ptrcast");
+                    }
+                    retStructValue = builder.CreateLoad(sretType, srcPtr, "ret_sret_val");
+                }
+
+                if (!retStructValue) {
+                    return VisitResult();
+                }
+
+                builder.CreateStore(retStructValue, sretPtr);
+                builder.CreateRetVoid();
+                return VisitResult(sretPtr, ValueType::POINTER, sretType);
+            }
+
+            builder.CreateStore(Constant::getNullValue(sretType), sretPtr);
+            builder.CreateRetVoid();
+            return VisitResult(sretPtr, ValueType::POINTER, sretType);
+        }
         
         if (node->data.return_stmt.expr) {
             VisitResult retVal = visit(node->data.return_stmt.expr);
@@ -2632,7 +2791,7 @@ public:
         if (expectedReturnType->isVoidTy()) {
             builder.CreateRetVoid();
         } else {
-            builder.CreateRet(ConstantInt::get(expectedReturnType, 0));
+            builder.CreateRet(Constant::getNullValue(expectedReturnType));
         }
         return VisitResult(nullptr, ValueType::VOID);
     }
