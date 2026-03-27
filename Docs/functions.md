@@ -26,7 +26,14 @@ fn function_name(parameters) -> return_type {
     return value
 }
 ```
-
+当然 你也可以
+```vix
+fn function_name(paramters): return_type{
+    //func cond
+    return value
+}
+```
+这两种语法是并存的！
 ### 示例
 
 ```vix

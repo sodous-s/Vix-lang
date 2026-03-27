@@ -35,19 +35,10 @@ semantic_errors -> errs
 #include <unistd.h>
 #include "../include/ast.h"
 #include "../include/parser.h"
-#include "../include/bytecode.h"
 #include "../include/compiler.h"
-#include "../include/qbe-ir/ir.h"
 #include "../include/vic-ir/mir.h"
 #include "../include/llvm_emit.h"
 #include "../include/semantic.h"
-#include "../include/qbe-ir/opt.h"
-
-typedef enum {
-    BACKEND_DEFAULT_LLVM,//提拔为默认后端
-    BACKEND_QBE,
-    BACKEND_CPP//cpp我不要你了
-} BackendType;
 
 extern FILE* yyin;
 extern ASTNode* root;
@@ -58,21 +49,15 @@ const char* current_input_filename = NULL;
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s <input.vix> [-o output_file]\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix>  -o <output_file> -kt\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix>  -kt (generate C++ code without compiling)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix>  -q <qbe_ir_file>\n", argv[0]);
+        fprintf(stderr, "       %s <input.vix>  -o <output_file> [-kt]\n", argv[0]);
         fprintf(stderr, "       %s <input.vix>  -ir <vic_ir_file>\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> -ll <cpp_file>\n", argv[0]);
+        fprintf(stderr, "       %s <input.vix> -ll <llvm_ir_file>\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> -obj [obj_file] (output object file via llc)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> -b [output_file] (output bytecode to .vbc file or stdout)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> -ast (output AST only)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> -q (output QBE IR only)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> -cpp (output C++ code only)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> -ll (output LLVM IR only)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> -llvm (output LLVM IR only)\n", argv[0]);
         fprintf(stderr, "       %s <input.vix> --debug (enable debug logs)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> (output all: bytecode, AST, QBE IR, C++ code, LLVM IR)\n", argv[0]);
-        fprintf(stderr, "       %s <input.vix> -o output_file --backend=qbe|llvm|cpp\n", argv[0]);
+        fprintf(stderr, "       %s <input.vix> --target=<triple> (set codegen/link target)\n", argv[0]);
         return 1;
     }
     
@@ -82,30 +67,22 @@ int main(int argc, char **argv) {
     }
     
     char* out_f = NULL;
-    char* qbe_f = NULL;
     char* vic_f = NULL;
     char* llvm_f = NULL;
     char* obj_f = NULL;
-    char* bc_f = NULL;
     char* in_f = NULL;
     int is_vic = 0;
     int save_c = 0;
     int keep_c = 0;
-    int gen_qbe = 0;
     int gen_vic = 0;
     int gen_llvm = 0;
     int gen_obj = 0;
-    int out_bc = 0;
     int out_ast = 0;
-    int out_qbe = 0;
-    int out_cpp = 0;
     int out_llvm = 0;
     int dbg = 0;
-    int opt = 0;
     char* target = NULL;
     int no_std = 0;
     int no_main = 0;
-    BackendType b_type = BACKEND_DEFAULT_LLVM;
     
     for (int i = 1; i < argc; i++) {
         if (argv[i][0] != '-' && strcmp(argv[i], "init") != 0) {
@@ -114,19 +91,7 @@ int main(int argc, char **argv) {
         }
     }
     for (int i = 1; i < argc; i++) {
-        if (strncmp(argv[i], "--backend=", 10) == 0) {
-            const char* b_str = argv[i] + 10;
-            if (strcmp(b_str, "qbe") == 0) {
-                b_type = BACKEND_QBE;
-            } else if (strcmp(b_str, "llvm") == 0) {
-                b_type = BACKEND_DEFAULT_LLVM;
-            } else if (strcmp(b_str, "cpp") == 0) {
-                b_type = BACKEND_CPP;
-            } else {
-                fprintf(stderr, "Er: Unknown backend '%s' backends: qbe, llvm, cpp\n", b_str);
-                return 1;
-            }
-        } else if (strncmp(argv[i], "--target=", 9) == 0) {
+        if (strncmp(argv[i], "--target=", 9) == 0) {
             target = argv[i] + 9;
         } else if (strcmp(argv[i], "--target") == 0) {
             if (i + 1 < argc) {
@@ -145,16 +110,6 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Er: -o option requires a filename\n");
                 return 1;
             }
-        } else if (strcmp(argv[i], "-q") == 0) {
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
-                qbe_f = argv[i + 1];
-                gen_qbe = 1;
-                i++;
-            } else {
-                out_qbe = 1;
-            }
-        } else if (strcmp(argv[i], "-opt") == 0) {
-            opt = 1;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0 || strcmp(argv[i] , "-ver") == 0){
             printf("Vix Compiler 0.1.0_rc1_2 (Beta_26.01.01) by:Mincx1203 Copyright(c) 2025-2026\n");
             return 0;
@@ -186,46 +141,27 @@ int main(int argc, char **argv) {
             }
         } else if (strcmp(argv[i], "-kt") == 0) {
             keep_c = 1;
-        } else if (strcmp(argv[i], "-b") == 0) {
-            out_bc = 1;
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
-                bc_f = argv[i + 1];
-                i++;
-            }
-        } else if (strcmp(argv[i], "--bytecode") == 0) {
-            out_bc = 1;
-            if (i + 1 < argc && argv[i + 1][0] != '-') {
-                bc_f = argv[i + 1];
-                i++;
-            }
         } else if (strcmp(argv[i], "-ast") == 0) {
             out_ast = 1;
-        } else if (strcmp(argv[i], "-cpp") == 0) {
-            out_cpp = 1;
         } else if (strcmp(argv[i], "--debug") == 0) {
             dbg = 1;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             fprintf(stderr, "usage: %s <input.vix> [-o output_file]\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> [-o output_file] [-kt]\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> -q <qbe_ir_file>\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -ir <vic_ir_file>\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -llvm <llvm_ir_file>\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -ll <llvm_ir_file>\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -obj [obj_file] (output object file via llc)\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> -b [output_file.vbc] (output bytecode to .vbc file or stdout)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -ast (output AST only)\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> -q (output QBE IR only)\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> -cpp (output C++ code only)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -ll (output LLVM IR only)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> -llvm (output LLVM IR only)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> --debug (enable debug logs)\n", argv[0]);
             fprintf(stderr, "       %s <input.vix> --target=<triple> (set codegen/link target, e.g. x86_64-unknown-none)\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> (output all intermediate representations)\n", argv[0]);
-            fprintf(stderr, "       %s <input.vix> -o output_file --backend=qbe|llvm|cpp\n", argv[0]);
+            fprintf(stderr, "       %s <input.vix> (LLVM backend is the default backend)\n", argv[0]);
             return 0;
         } else if (argv[i][0] == '-' && strcmp(argv[i], "-") != 0) {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
-            fprintf(stderr, "Usage: %s <input.vix> [-o output_file] [-kt] [-q [qbe_file]] [-ir vic_file] [-llvm [llvm_file]] [-ll [llvm_file]] [-obj [obj_file]] [-b [output_file.vbc]] [-ast] [-cpp] [--debug] [--target=<triple>] [--backend=qbe|llvm|cpp]\n", argv[0]);
+            fprintf(stderr, "Usage: %s <input.vix> [-o output_file] [-kt] [-ir vic_file] [-llvm [llvm_file]] [-ll [llvm_file]] [-obj [obj_file]] [-ast] [--debug] [--target=<triple>]\n", argv[0]);
             return 1;
         } else {
             is_vic = strlen(argv[i]) > 4 && strcmp(argv[i] + strlen(argv[i]) - 4, ".vic") == 0;
@@ -236,18 +172,13 @@ int main(int argc, char **argv) {
         in_f = argv[1];
     }
     int exp_mode =
-        out_bc ||
         out_ast ||
-        out_qbe ||
-        out_cpp ||
         out_llvm ||
-        gen_qbe ||
         gen_vic ||
         gen_llvm ||
         gen_obj;
 
-    if (b_type == BACKEND_DEFAULT_LLVM &&
-        !exp_mode &&
+    if (!exp_mode &&
         !out_f &&
         save_c == 0) {
         char* dot = strrchr(in_f, '.');
@@ -302,29 +233,7 @@ int main(int argc, char **argv) {
         bare = 1;
     }
     
-    if (b_type == BACKEND_QBE && save_c) {
-        gen_qbe = 1;
-        if (!qbe_f) {
-            char* dot = strrchr(out_f, '.');
-            if (dot) {
-                size_t len = dot - out_f;
-                char* qbe_name = malloc(len + 5);
-                if (qbe_name) {
-                    strncpy(qbe_name, out_f, len);
-                    qbe_name[len] = '\0';
-                    strcat(qbe_name, ".ssa");
-                    qbe_f = qbe_name;
-                }
-            } else {
-                char* qbe_name = malloc(strlen(out_f) + 5);
-                if (qbe_name) {
-                    strcpy(qbe_name, out_f);
-                    strcat(qbe_name, ".ssa");
-                    qbe_f = qbe_name;
-                }
-            }
-        }
-    } else if (b_type == BACKEND_DEFAULT_LLVM && save_c) {
+    if (save_c) {
         gen_llvm = 1;
         if (!llvm_f) {
             char* dot = strrchr(out_f, '.');
@@ -406,44 +315,6 @@ int main(int argc, char **argv) {
             return 1;
         }
 
-        ByteCodeGen* gen = create_bytecode_gen();
-        generate_bytecode(gen, root);
-        
-        if (out_bc) {
-            FILE* bcout = stdout;
-            char bcname[256];
-            const char* fname = NULL;
-            
-            if (bc_f != NULL) {
-                if (strstr(bc_f, ".vbc") == NULL) {
-                    snprintf(bcname, sizeof(bcname), "%s.vbc", bc_f);
-                    fname = bcname;
-                } else {
-                    fname = bc_f;
-                }
-                
-                bcout = fopen(fname, "w");
-                if (!bcout) {
-                    perror("Failed to open bytecode output file");
-                    free_bytecode_gen(gen);
-                    if (root) free_ast(root);
-                    fclose(input_file);
-                    return 1;
-                }
-            }
-            
-            print_bytecode_to_file(gen->bytecode, bcout);
-            
-            if (bc_f != NULL) {
-                fclose(bcout);
-            }
-            
-            free_bytecode_gen(gen);
-            if (root) free_ast(root);
-            fclose(input_file);
-            return 0;
-        }
-        
         if (gen_vic) {
             char vic_filename[256];
             if (strstr(vic_f, ".vic") == NULL) {
@@ -453,13 +324,11 @@ int main(int argc, char **argv) {
             }
             FILE* vic_file = fopen(vic_filename, "w");
             if (!vic_file) {
-                free_bytecode_gen(gen);
                 fclose(input_file);
                 return 1;
             }
             vic_gen(root, vic_file);
             fclose(vic_file);
-            free_bytecode_gen(gen);
             if (root) free_ast(root);
             fclose(input_file);
             return 0;
@@ -486,7 +355,6 @@ int main(int argc, char **argv) {
             FILE* llvm_file = fopen(llvm_f, "w");
             if (!llvm_file) {
                 fprintf(stderr, "Error: Cannot open LLVM IR file %s for writing\n", llvm_f);
-                free_bytecode_gen(gen);
                 fclose(input_file);
                 return 1;
             }
@@ -525,13 +393,11 @@ int main(int argc, char **argv) {
                 int lres = system(lcmd);
                 if (lres != 0) {
                     fprintf(stderr, "Error: Failed to compile LLVM IR to object file via llc\n");
-                    free_bytecode_gen(gen);
                     fclose(input_file);
                     return 1;
                 }
 
                 if (!save_c) {
-                    free_bytecode_gen(gen);
                     if (root) {
                         free_ast(root);
                     }
@@ -539,7 +405,7 @@ int main(int argc, char **argv) {
                     return 0;
                 }
             }
-            if (b_type == BACKEND_DEFAULT_LLVM && out_f && save_c) {
+            if (out_f && save_c) {
                 const char* ls = "linker.ld";
                 if (bare && access(ls, R_OK) != 0 && access("src/linker.ld", R_OK) == 0) {
                     ls = "src/linker.ld";
@@ -549,7 +415,6 @@ int main(int argc, char **argv) {
                 char *ccmd = malloc(ccmd_sz);
                 if (ccmd == NULL) {
                     fprintf(stderr, "Er: Failed to allocate memory for clang command\n");
-                    free_bytecode_gen(gen);
                     fclose(input_file);
                     return 1;
                 }
@@ -571,7 +436,6 @@ int main(int argc, char **argv) {
                 if (cres != 0) {
                     fprintf(stderr, "Error: Failed to compile LLVM IR to executable\n");
                     free(ccmd);
-                    free_bytecode_gen(gen);
                     fclose(input_file);
                     return 1;
                 }
@@ -583,236 +447,33 @@ int main(int argc, char **argv) {
                 }
             }
             
-            free_bytecode_gen(gen);
             if (root) {
                 free_ast(root);
             }//福瑞
             fclose(input_file);
-            if (out_f && out_f != in_f && out_f != argv[1] && 
-                out_f != llvm_f && out_f != qbe_f) {
+            if (out_f && out_f != in_f && out_f != argv[1] && out_f != llvm_f) {
             }
             
             return 0;
         }
-        
-        if (gen_qbe) {
-            char qbe_filename[2048];
-            
-            if (!qbe_f) {
-                char* dot = strrchr(in_f, '.');
-                if (dot) {
-                    size_t len = dot - in_f;
-                    snprintf(qbe_filename, sizeof(qbe_filename), "%.*s.ssa", (int)len, in_f);
-                } else {
-                    snprintf(qbe_filename, sizeof(qbe_filename), "%s.ssa", in_f);
-                }
-                qbe_f = qbe_filename;
-            } else {
-                if (strstr(qbe_f, ".ssa") == NULL) {
-                    snprintf(qbe_filename, sizeof(qbe_filename), "%s.ssa", qbe_f);
-                    qbe_f = qbe_filename;
-                }
-            }
-            
-            FILE* qbe_file = fopen(qbe_f, "w");
-            if (!qbe_file) {
-                fprintf(stderr, "Er: Cannot open QBE IR file %s for writing\n", qbe_f);
-                free_bytecode_gen(gen);
-                fclose(input_file);
-                return 1;
-            }
-            ir_gen(root, qbe_file);
-            fclose(qbe_file);
-            
-            if (opt) {
-                qbe_opt_file(qbe_f);
-            }
-            if (b_type == BACKEND_QBE && out_f && save_c) {
-                char s_f[2048];
-                snprintf(s_f, sizeof(s_f), "%s.s", out_f);
-                size_t qcmd_sz = strlen("qbe -o ") + strlen(s_f) + strlen(" ") + strlen(qbe_f) + 1;
-                char *qcmd = malloc(qcmd_sz);
-                if (qcmd == NULL) {
-                    fprintf(stderr, "Er: Failed to allocate memory for qbe command\n");
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-                
-                snprintf(qcmd, qcmd_sz, "qbe -o %s %s", s_f, qbe_f);
-                
-                int qres = system(qcmd);
-                if (qres != 0) {
-                    fprintf(stderr, "Er: Failed to convert SSA to assembly\n");
-                    free(qcmd);
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-                free(qcmd);
-                //as to obj
-                char o_f[2048];
-                snprintf(o_f, sizeof(o_f), "%s.o", out_f);
-                
-                size_t ascmd_sz = strlen("as -64 ") + strlen(s_f) + strlen(" -o ") + strlen(o_f) + 1;
-                char *ascmd = malloc(ascmd_sz);
-                if (ascmd == NULL) {
-                    fprintf(stderr, "Er: Failed to allocate memory for as command\n");
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-                
-                snprintf(ascmd, ascmd_sz, "as -64 %s -o %s", s_f, o_f);
-                
-                int asres = system(ascmd);
-                if (asres != 0) {
-                    fprintf(stderr, "Er: Failed to assemble object file\n");
-                    free(ascmd);
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-                free(ascmd);
-                //ld
-                size_t gcmd_sz = strlen("g++ -std=c++2a -O2 -flto ") + strlen(o_f) + strlen(" -o ") + strlen(out_f) + strlen(" -lm") + 1;
-                char *gcmd = malloc(gcmd_sz);
-                if (gcmd == NULL) {
-                    fprintf(stderr, "Er: Failed to allocate memory for g++ command\n");
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-                
-                snprintf(gcmd, gcmd_sz, "g++ -std=c++2a -O2 -flto %s -o %s -lm", o_f, out_f);
-                
-                int gres = system(gcmd);
-                if (gres != 0) {
-                    fprintf(stderr, "Error: Failed to link executable\n");
-                    free(gcmd);
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-                free(gcmd);
-                
-                if (!keep_c) {
-                    remove(qbe_f);
-                    remove(s_f);
-                    remove(o_f);
-                }
-            }
-            
-            free_bytecode_gen(gen);
-            if (root) {
-                free_ast(root);
-            }
-            fclose(input_file);
-            return 0;
-        }
+
         if (out_ast) {
             printf("===========================AST=======================\n");
             print_ast(root, 0);
             printf("===================================================\n");
-            free_bytecode_gen(gen);
             if (root) free_ast(root);
             fclose(input_file);
             return 0;
         }
-        
-        if (out_qbe) {
-            printf("=========================QBE IR====================\n");
-            ir_gen(root, stdout);
-            printf("===================================================\n");
-            free_bytecode_gen(gen);
-            if (root) free_ast(root);
-            fclose(input_file);
-            return 0;
-        }
-        
-        if (out_cpp) {
-            printf("=========================CPP==================\n");
-            TypeInferenceContext* t_ctx = create_type_inference_context();
-            analyze_ast(t_ctx, root);
-            compile_ast_to_cpp_with_types(gen, t_ctx, root, stdout);
-            free_type_inference_context(t_ctx);
-            printf("===============================================\n");
-            free_bytecode_gen(gen);
-            if (root) free_ast(root);
-            fclose(input_file);
-            return 0;
-        }
-        
+
         if (out_llvm) {
             printf("=========================LLVM IR===================\n");
             llvm_emit_from_ast(root, stdout);
             printf("===================================================\n");
-            free_bytecode_gen(gen);
             if (root) free_ast(root);
             fclose(input_file);
             return 0;
         }
-        
-        if (save_c && out_f != NULL) {
-            char cpp_f[2048];
-            if (strstr(out_f, ".cpp") == NULL) {
-                char* dot = strrchr(out_f, '.');
-                if (dot && (strcmp(dot, ".exe") == 0 || strcmp(dot, ".out") == 0)) {
-                    size_t len = dot - out_f;
-                    snprintf(cpp_f, sizeof(cpp_f), "%.*s.cpp", (int)len, out_f);
-                } else {
-                    snprintf(cpp_f, sizeof(cpp_f), "%s.cpp", out_f);
-                }
-            } else {
-                strcpy(cpp_f, out_f);
-            }
-            
-            FILE* output_file = fopen(cpp_f, "w");
-            if (!output_file) {
-                perror("Failed to create output file");
-                free_bytecode_gen(gen);
-                fclose(input_file);
-                return 1;
-            }
-            
-            TypeInferenceContext* t_ctx = create_type_inference_context();
-            analyze_ast(t_ctx, root);
-            compile_ast_to_cpp_with_types(gen, t_ctx, root, output_file);
-            free_type_inference_context(t_ctx);
-            fclose(output_file);
-            
-            if (!keep_c) {
-                char ccmd[2048];
-                snprintf(ccmd, sizeof(ccmd), "g++ -std=c++2a -O3 -flto %s -o %s -lm", cpp_f, out_f);
-                
-                int cres = system(ccmd);
-                if (cres == 0) {
-                    remove(cpp_f);
-                } else {
-                    fprintf(stderr, "Failed to compile to executable\n");
-                    free_bytecode_gen(gen);
-                    fclose(input_file);
-                    return 1;
-                }
-            } else {
-            }
-        } else if (keep_c) {
-            char temp_cpp[] = "temp.cpp";
-            FILE* output_file = fopen(temp_cpp, "w");
-            if (!output_file) {
-                perror("Failed to create temporary output file");
-                free_bytecode_gen(gen);
-                fclose(input_file);
-                return 1;
-            }
-            TypeInferenceContext* t_ctx = create_type_inference_context();
-            analyze_ast(t_ctx, root);
-            compile_ast_to_cpp_with_types(gen, t_ctx, root, output_file);
-            free_type_inference_context(t_ctx);
-            fclose(output_file);
-        }
-        
-        free_bytecode_gen(gen);
     } else {
         if (get_error_count() == 0) {
             const char* fname = current_input_filename ? current_input_filename : "unknown";
