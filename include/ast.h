@@ -185,6 +185,7 @@ typedef struct ASTNode {
         struct {
             char* name;
             struct ASTNode* params;
+            struct ASTNode* generic_params;
             struct ASTNode* return_type;
             struct ASTNode* body;
             int is_extern;
@@ -195,6 +196,7 @@ typedef struct ASTNode {
         struct {
             struct ASTNode* func;
             struct ASTNode* args;
+            struct ASTNode* type_args;
         } call;
         struct {
             char* name;

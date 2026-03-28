@@ -30,6 +30,7 @@ vix0.0.1 released!
 using namespace llvm;
 
 extern "C" const char* current_input_filename;
+extern "C" void report_semantic_error_with_location(const char* message, const char* filename, int line);
 
 static std::string g_vix_target_triple;
 
@@ -188,9 +189,16 @@ private:
     std::map<std::string, std::pair<Type*, int>> arrayTypes;
     std::map<std::string, int> variableArraySizes;
     std::map<std::string, bool> stringVariables;//标记字符串变量
+    std::map<std::string, Type*> genericTypeBindings;
     
 public:
     TypeHelper(LLVMContext& ctx) : context(ctx) {}
+    void setGenericTypeBindings(const std::map<std::string, Type*>& bindings) {
+        genericTypeBindings = bindings;
+    }
+    void clearGenericTypeBindings() {
+        genericTypeBindings.clear();
+    }
     void registerStringVariable(const std::string& name) {
         stringVariables[name] = true;
     }
@@ -374,6 +382,10 @@ public:
         
         if (node->type == AST_IDENTIFIER) {
             std::string typeName(node->data.identifier.name);
+            auto git = genericTypeBindings.find(typeName);
+            if (git != genericTypeBindings.end() && git->second) {
+                return git->second;
+            }
             if (typeName == "ptr") return PointerType::getUnqual(Type::getInt8Ty(context));
             if (typeName == "str") return PointerType::getUnqual(Type::getInt8Ty(context));
             if (typeName == "i8" || typeName == "u8" || typeName == "char") return Type::getInt8Ty(context);
@@ -546,8 +558,18 @@ private:
     std::map<std::string, std::vector<int>> functionArrayParamPositions;
     std::map<std::string, StructType*> functionSRetResultTypesByName;
     std::map<Function*, StructType*> functionSRetResultTypesByFunc;
+    std::map<std::string, ASTNode*> genericFunctionTemplates;
+    std::map<std::string, int> genericFunctionArity;
+    std::map<std::string, Type*> activeGenericTypeBindings;
     std::vector<BasicBlock*> loopBreakTargets;
     std::vector<BasicBlock*> loopContinueTargets;
+
+    void reportCodegenSemanticError(ASTNode* node, const std::string& message) {
+        const char* filename = (node && node->source_file) ? node->source_file :
+            (current_input_filename ? current_input_filename : "unknown");
+        int line = (node && node->location.first_line > 0) ? node->location.first_line : 1;
+        report_semantic_error_with_location(message.c_str(), filename, line);
+    }
 
     bool usesStructSRet(Function* func) const {
         if (!func) return false;
@@ -564,6 +586,121 @@ private:
         if (!func || !structType) return;
         functionSRetResultTypesByName[funcName] = structType;
         functionSRetResultTypesByFunc[func] = structType;
+    }
+
+    static std::string sanitizeTypeToken(const std::string& raw) {
+        std::string out;
+        out.reserve(raw.size());
+        for (char c : raw) {
+            if ((c >= 'a' && c <= 'z') ||
+                (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') ||
+                c == '_') {
+                out.push_back(c);
+            } else {
+                out.push_back('_');
+            }
+        }
+        if (out.empty()) return "unk";
+        return out;
+    }
+
+    std::string typeNodeToMangleToken(ASTNode* typeNode) const {
+        if (!typeNode) return "unk";
+        switch (typeNode->type) {
+            case AST_TYPE_INT32: return "i32";
+            case AST_TYPE_INT64: return "i64";
+            case AST_TYPE_INT8: return "i8";
+            case AST_TYPE_FLOAT32: return "f32";
+            case AST_TYPE_FLOAT64: return "f64";
+            case AST_TYPE_STRING: return "str";
+            case AST_TYPE_VOID: return "void";
+            case AST_TYPE_POINTER: return "ptr";
+            case AST_TYPE_LIST: {
+                std::string elem = typeNodeToMangleToken(typeNode->data.list_type.element_type);
+                return "list_" + sanitizeTypeToken(elem);
+            }
+            case AST_TYPE_FIXED_SIZE_LIST: {
+                std::string elem = typeNodeToMangleToken(typeNode->data.fixed_size_list_type.element_type);
+                return "arr_" + sanitizeTypeToken(elem) + "_" + std::to_string(typeNode->data.fixed_size_list_type.size);
+            }
+            case AST_IDENTIFIER:
+                if (typeNode->data.identifier.name) return sanitizeTypeToken(typeNode->data.identifier.name);
+                return "id";
+            default:
+                return "unk";
+        }
+    }
+
+    std::string mangleGenericFunctionName(const std::string& baseName, ASTNode* typeArgs) const {
+        std::string name = baseName;
+        name += "__g";
+        if (!typeArgs || typeArgs->type != AST_EXPRESSION_LIST) return name;
+        for (int i = 0; i < typeArgs->data.expression_list.expression_count; i++) {
+            ASTNode* arg = typeArgs->data.expression_list.expressions[i];
+            name += "_";
+            name += typeNodeToMangleToken(arg);
+        }
+        return name;
+    }
+
+    bool bindGenericTypeArgs(ASTNode* fnNode, ASTNode* typeArgs, std::map<std::string, Type*>& outBindings) {
+        outBindings.clear();
+        if (!fnNode || fnNode->type != AST_FUNCTION) return false;
+        ASTNode* genericParams = fnNode->data.function.generic_params;
+        if (!genericParams || genericParams->type != AST_EXPRESSION_LIST) return false;
+        if (!typeArgs || typeArgs->type != AST_EXPRESSION_LIST) return false;
+
+        int paramCount = genericParams->data.expression_list.expression_count;
+        int argCount = typeArgs->data.expression_list.expression_count;
+        if (paramCount != argCount) return false;
+
+        for (int i = 0; i < paramCount; i++) {
+            ASTNode* p = genericParams->data.expression_list.expressions[i];
+            ASTNode* a = typeArgs->data.expression_list.expressions[i];
+            if (!p || p->type != AST_IDENTIFIER || !p->data.identifier.name || !a) {
+                return false;
+            }
+            Type* concrete = typeHelper.getTypeFromTypeNode(a);
+            outBindings[p->data.identifier.name] = concrete;
+        }
+
+        return true;
+    }
+
+    Function* instantiateGenericFunction(const std::string& baseName, ASTNode* typeArgs) {
+        auto fit = genericFunctionTemplates.find(baseName);
+        if (fit == genericFunctionTemplates.end()) {
+            return nullptr;
+        }
+
+        std::string mangledName = mangleGenericFunctionName(baseName, typeArgs);
+        if (Function* existing = module->getFunction(mangledName)) {
+            return existing;
+        }
+
+        std::map<std::string, Type*> bindings;
+        if (!bindGenericTypeArgs(fit->second, typeArgs, bindings)) {
+            llvm::errs() << "Error: Failed to bind generic type arguments for function '" << baseName << "'\n";
+            return nullptr;
+        }
+
+        auto oldBindings = activeGenericTypeBindings;
+        activeGenericTypeBindings = bindings;
+        typeHelper.setGenericTypeBindings(activeGenericTypeBindings);
+
+        IRBuilder<>::InsertPoint savedIP = builder.saveIP();
+
+        VisitResult res = visitFunction(fit->second, &mangledName);
+
+        if (savedIP.isSet()) {
+            builder.restoreIP(savedIP);
+        }
+
+        activeGenericTypeBindings = oldBindings;
+        typeHelper.setGenericTypeBindings(activeGenericTypeBindings);
+        if (!res.value) return nullptr;
+        return module->getFunction(mangledName);
     }
     
     bool ensureValidInsertPoint() {
@@ -1318,6 +1455,16 @@ public:
         ValueType resultType = (promotedLeftType > promotedRightType) 
                                ? promotedLeftType : promotedRightType;
         bool isFloat = (resultType == ValueType::FLOAT32 || resultType == ValueType::FLOAT64);
+
+        bool isArithmeticOp = (node->data.binop.op == OP_ADD || node->data.binop.op == OP_SUB ||
+                               node->data.binop.op == OP_MUL || node->data.binop.op == OP_DIV ||
+                               node->data.binop.op == OP_MOD);
+        if (isArithmeticOp && !isFloat) {
+            if (!leftVal->getType()->isIntegerTy() || !rightVal->getType()->isIntegerTy()) {
+                reportCodegenSemanticError(node, "arithmetic operators require numeric operands");
+                return VisitResult();
+            }
+        }
 
         auto toBoolValue = [&](Value* v, ValueType vt, const char* name) -> Value* {
             if (vt == ValueType::BOOL && v->getType()->isIntegerTy(1)) {
@@ -2167,7 +2314,28 @@ public:
     
     VisitResult visitProgram(ASTNode* node) {
         if (!node) return VisitResult();
+
         for (int i = 0; i < node->data.program.statement_count; i++) {
+            ASTNode* stmt = node->data.program.statements[i];
+            if (!stmt || stmt->type != AST_FUNCTION) continue;
+            ASTNode* gparams = stmt->data.function.generic_params;
+            if (gparams && gparams->type == AST_EXPRESSION_LIST && gparams->data.expression_list.expression_count > 0) {
+                std::string name(stmt->data.function.name ? stmt->data.function.name : "");
+                if (!name.empty()) {
+                    genericFunctionTemplates[name] = stmt;
+                    genericFunctionArity[name] = gparams->data.expression_list.expression_count;
+                }
+            }
+        }
+
+        for (int i = 0; i < node->data.program.statement_count; i++) {
+            ASTNode* stmt = node->data.program.statements[i];
+            if (stmt && stmt->type == AST_FUNCTION) {
+                ASTNode* gparams = stmt->data.function.generic_params;
+                if (gparams && gparams->type == AST_EXPRESSION_LIST && gparams->data.expression_list.expression_count > 0) {
+                    continue;
+                }
+            }
             visit(node->data.program.statements[i]);
             BasicBlock* currentBB = builder.GetInsertBlock();
             if (currentBB && currentBB->getTerminator()) {
@@ -2363,8 +2531,8 @@ public:
         return VisitResult();
     }
     
-    VisitResult visitFunction(ASTNode* node) {
-        std::string funcName(node->data.function.name);
+    VisitResult visitFunction(ASTNode* node, const std::string* overrideName = nullptr) {
+        std::string funcName = overrideName ? *overrideName : std::string(node->data.function.name);
         
         if (Function* existingFunc = module->getFunction(funcName)) {
             StructType* sretStructType = getStructSRetType(existingFunc);
@@ -2398,7 +2566,12 @@ public:
                             int arrayElementCount = -1;
                             if (right && right->type == AST_IDENTIFIER) {
                                 std::string typeName(right->data.identifier.name);
-                                if (typeName == "ptr") {
+                                auto gbt = activeGenericTypeBindings.find(typeName);
+                                if (gbt != activeGenericTypeBindings.end() && gbt->second) {
+                                    Type* llvmParamType = gbt->second;
+                                    paramType = typeHelper.getValueTypeFromType(llvmParamType);
+                                    paramTypes.push_back(llvmParamType);
+                                } else if (typeName == "ptr") {
                                     if (funcName == "main" && paramName == "argv") {
                                         paramType = ValueType::POINTER;
                                         paramTypes.push_back(PointerType::getUnqual(PointerType::getUnqual(Type::getInt8Ty(context))));
@@ -2478,6 +2651,8 @@ public:
                 }
             }
         }
+        typeHelper.setGenericTypeBindings(activeGenericTypeBindings);
+
         Type* logicalReturnType = Type::getVoidTy(context);
         ValueType returnValueType = ValueType::VOID;
         if (node->data.function.return_type) {
@@ -2602,6 +2777,24 @@ public:
         if (node->data.call.func->type != AST_IDENTIFIER) return VisitResult();
         
         std::string calleeName(node->data.call.func->data.identifier.name);
+
+        if (node->data.call.type_args && node->data.call.type_args->type == AST_EXPRESSION_LIST) {
+            int actualTypeArgCount = node->data.call.type_args->data.expression_list.expression_count;
+            auto arityIt = genericFunctionArity.find(calleeName);
+            if (arityIt != genericFunctionArity.end() && arityIt->second != actualTypeArgCount) {
+                llvm::errs() << "Error: Generic function '" << calleeName << "' expects "
+                             << arityIt->second << " type arguments but got " << actualTypeArgCount << "\n";
+                return VisitResult();
+            }
+
+            Function* instFn = instantiateGenericFunction(calleeName, node->data.call.type_args);
+            if (!instFn) {
+                llvm::errs() << "Error: Failed to instantiate generic function '" << calleeName << "'\n";
+                return VisitResult();
+            }
+            calleeName = mangleGenericFunctionName(calleeName, node->data.call.type_args);
+        }
+
         Function* callee = module->getFunction(calleeName);
         if (!callee) {
             llvm::errs() << "Error: Call to undefined function '" << calleeName << "'\n";

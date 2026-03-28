@@ -191,12 +191,14 @@ static void set_source_file_recursive(ASTNode* node, const char* source_file) {
             break;
         case AST_FUNCTION:
             set_source_file_recursive(node->data.function.params, source_file);
+            set_source_file_recursive(node->data.function.generic_params, source_file);
             set_source_file_recursive(node->data.function.return_type, source_file);
             set_source_file_recursive(node->data.function.body, source_file);
             break;
         case AST_CALL:
             set_source_file_recursive(node->data.call.func, source_file);
             set_source_file_recursive(node->data.call.args, source_file);
+            set_source_file_recursive(node->data.call.type_args, source_file);
             break;
         case AST_STRUCT_DEF:
             set_source_file_recursive(node->data.struct_def.fields, source_file);
@@ -879,6 +881,7 @@ ASTNode* create_function_node_with_location(const char* name, ASTNode* params, A
     node->data.function.name = malloc(strlen(name) + 1);
     strcpy(node->data.function.name, name);
     node->data.function.params = params;
+    node->data.function.generic_params = NULL;
     node->data.function.return_type = return_type;
     node->data.function.body = body;
     node->data.function.is_extern = 0;
@@ -925,6 +928,7 @@ ASTNode* create_extern_function_node_with_location(const char* name, ASTNode* pa
     node->data.function.name = malloc(strlen(name) + 1);
     strcpy(node->data.function.name, name);
     node->data.function.params = params;
+    node->data.function.generic_params = NULL;
     node->data.function.return_type = return_type;
     node->data.function.body = NULL;
     node->data.function.is_extern = 1;
@@ -990,6 +994,7 @@ ASTNode* create_call_node(ASTNode* func, ASTNode* args) {
     node->location = func->location;// 使用函数的位置
     node->data.call.func = func;
     node->data.call.args = args;
+    node->data.call.type_args = NULL;
     return node;
 }
 ASTNode* create_call_node_with_location(ASTNode* func, ASTNode* args, Location location) {
@@ -998,6 +1003,7 @@ ASTNode* create_call_node_with_location(ASTNode* func, ASTNode* args, Location l
     node->location = location;
     node->data.call.func = func;
     node->data.call.args = args;
+    node->data.call.type_args = NULL;
     return node;
 }
 ASTNode* create_call_node_with_yyltype(ASTNode* func, ASTNode* args, void* yylloc) {
@@ -1010,6 +1016,7 @@ ASTNode* create_call_node_with_yyltype(ASTNode* func, ASTNode* args, void* yyllo
     node->location.last_column = loc->last_column;
     node->data.call.func = func;
     node->data.call.args = args;
+    node->data.call.type_args = NULL;
     return node;
 }
 
@@ -1507,6 +1514,9 @@ void free_ast(ASTNode* node) {
             if (node->data.function.params) {
                 free_ast(node->data.function.params);
             }
+            if (node->data.function.generic_params) {
+                free_ast(node->data.function.generic_params);
+            }
             if (node->data.function.return_type) {
                 free_ast(node->data.function.return_type);
             }
@@ -1522,6 +1532,9 @@ void free_ast(ASTNode* node) {
             free_ast(node->data.call.func);
             if (node->data.call.args) {
                 free_ast(node->data.call.args);
+            }
+            if (node->data.call.type_args) {
+                free_ast(node->data.call.type_args);
             }
             break;
         case AST_STRUCT_DEF:
@@ -1805,6 +1818,11 @@ void print_ast(ASTNode* node, int indent) {
                 }
             }
             for (int i = 0; i < indent + 1; i++) printf("  ");
+            printf("Generic Params:\n");
+            if (node->data.function.generic_params) {
+                print_ast(node->data.function.generic_params, indent + 2);
+            }
+            for (int i = 0; i < indent + 1; i++) printf("  ");
             printf("Params:\n");
             if (node->data.function.params) {
                 print_ast(node->data.function.params, indent + 2);
@@ -1819,6 +1837,11 @@ void print_ast(ASTNode* node, int indent) {
         case AST_CALL:
             printf("Call:\n");
             if (node->data.call.func) print_ast(node->data.call.func, indent + 1);
+            if (node->data.call.type_args) {
+                for (int i = 0; i < indent + 1; i++) printf("  ");
+                printf("Type Args:\n");
+                print_ast(node->data.call.type_args, indent + 2);
+            }
             if (node->data.call.args) print_ast(node->data.call.args, indent + 1);
             break;
         case AST_STRUCT_DEF:

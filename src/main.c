@@ -361,6 +361,20 @@ int main(int argc, char **argv) {
             
             llvm_emit_from_ast(root, llvm_file);
             fclose(llvm_file);
+
+            if (get_error_count() > 0) {
+                fprintf(stderr, "Compilation failed with %d error(s)\n", get_error_count());
+                if (!keep_c) {
+                    remove(llvm_f);
+                }
+                if (root) {
+                    free_ast(root);
+                }
+                cleanup_error_handler();
+                fclose(input_file);
+                return 1;
+            }
+
             if (gen_obj) {
                 char oname[2048];
                 const char* fobj = obj_f;
