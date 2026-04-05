@@ -18,6 +18,26 @@ static char* get_line_content(int line_number);
 static void show_error_context_with_column(int line_number, int column);
 static int current_column = 1;
 static void show_error_context_with_column_and_length(int line_number, int column, int length);
+
+/* ANSI styles for richer diagnostics. */
+#define ANSI_RESET "\033[0m"
+#define ANSI_BOLD "\033[1m"
+#define ANSI_DIM "\033[2m"
+#define ANSI_RED "\033[31m"
+#define ANSI_YELLOW "\033[33m"
+#define ANSI_BLUE "\033[34m"
+#define ANSI_MAGENTA "\033[35m"
+#define ANSI_CYAN "\033[36m"
+#define ANSI_WHITE "\033[37m"
+#define ANSI_BG_RED "\033[41m"
+#define ANSI_BG_YELLOW "\033[43m"
+
+static const char* error_type_to_string(ErrorType error_type);
+static const char* error_type_color(ErrorType error_type);
+static const char* get_suggestion(ErrorType error_type);
+static int line_number_width(int line_number);
+static void print_suggestion_block(const char* suggestion);
+static void print_diagnostic_header(ErrorLevel level, ErrorType error_type, const char* message);
 void set_location(const char* filename, int line) {
     current_filename = filename ? filename : "unknown";
     current_line = line;
@@ -89,12 +109,28 @@ static void show_error_context_with_column(int line_number, int column) {
 }
 static void show_error_context_with_column_and_length(int line_number, int column, int length) {
     if (!source_content) return;
-    
+
+    int width = line_number_width(line_number + 1);
+    char* prev_line = get_line_content(line_number - 1);
     char* line_content = get_line_content(line_number);
-    if (!line_content) return;
-    
-    fprintf(stderr, "%d | %s\n", line_number, line_content);
-    fprintf(stderr, "  |");
+    char* next_line = get_line_content(line_number + 1);
+
+    if (!line_content) {
+        free(prev_line);
+        free(next_line);
+        return;
+    }
+
+    fprintf(stderr, "%s%*s |%s\n", ANSI_DIM, width, "", ANSI_RESET);
+    if (prev_line) {
+        fprintf(stderr, "%s%*d | %s%s\n", ANSI_DIM, width, line_number - 1, prev_line, ANSI_RESET);
+    }
+    fprintf(stderr, "%s%*d |%s %s%s%s\n", ANSI_BOLD ANSI_BLUE, width, line_number, ANSI_RESET, ANSI_WHITE, line_content, ANSI_RESET);
+    if (next_line) {
+        fprintf(stderr, "%s%*d | %s%s\n", ANSI_DIM, width, line_number + 1, next_line, ANSI_RESET);
+    }
+
+    fprintf(stderr, "%s%*s |%s ", ANSI_DIM, width, "", ANSI_RESET);
     for (int i = 0; i < column - 1 && line_content[i] != '\0'; i++) {
         if (line_content[i] == '\t') {
             fputc('\t', stderr);
@@ -102,16 +138,138 @@ static void show_error_context_with_column_and_length(int line_number, int colum
             fputc(' ', stderr);
         }
     }
-    for (int i = 0; i < length && (column - 1 + i) < (int)strlen(line_content) && line_content[column - 1 + i] != '\0'; i++) {
+
+    int caret_count = length > 0 ? length : 1;
+    for (int i = 0; i < caret_count; i++) {
         fputc('^', stderr);
     }
-    fprintf(stderr, "\n");
-    
+    fprintf(stderr, " %s<-- column %d%s\n", ANSI_BOLD ANSI_CYAN, column, ANSI_RESET);
+    fprintf(stderr, "%s%*s |%s\n", ANSI_DIM, width, "", ANSI_RESET);
+
+    free(prev_line);
     free(line_content);
+    free(next_line);
 }
 
 static void show_error_context(int line_number) {
     show_error_context_with_column_and_length(line_number, 1, 0);
+}
+
+static const char* error_type_to_string(ErrorType error_type) {
+    switch (error_type) {
+        case ERROR_SYNTAX:
+            return "SyntaxError";
+        case ERROR_LEXICAL:
+            return "LexicalError";
+        case ERROR_TYPE:
+            return "TypeError";
+        case ERROR_UNDEFINED:
+        case ERROR_UNDEFINED_FUNC:
+            return "NameError";
+        case ERROR_REDEFINITION:
+            return "RedefinitionError";
+        case ERROR_SEMANTIC:
+            return "SemanticError";
+        case ERROR_RUNTIME:
+            return "RuntimeError";
+        case ERROR_WARNING:
+            return "Warning";
+        case ERROR_ARRAY_OUT_OF_BOUNDS:
+            return "BoundsError";
+        default:
+            return "Error";
+    }
+}
+
+static const char* error_type_color(ErrorType error_type) {
+    switch (error_type) {
+        case ERROR_SYNTAX:
+        case ERROR_LEXICAL:
+            return ANSI_MAGENTA;
+        case ERROR_TYPE:
+        case ERROR_SEMANTIC:
+            return ANSI_BLUE;
+        case ERROR_UNDEFINED:
+        case ERROR_UNDEFINED_FUNC:
+        case ERROR_REDEFINITION:
+            return ANSI_CYAN;
+        case ERROR_RUNTIME:
+        case ERROR_ARRAY_OUT_OF_BOUNDS:
+            return ANSI_RED;
+        case ERROR_WARNING:
+            return ANSI_YELLOW;
+        default:
+            return ANSI_WHITE;
+    }
+}
+
+static const char* get_suggestion(ErrorType error_type) {
+    switch (error_type) {
+        case ERROR_UNDEFINED:
+            return "Declare the identifier before use or check for typos";
+        case ERROR_UNDEFINED_FUNC:
+            return "Ensure the function is declared and linked, or check its name";
+        case ERROR_REDEFINITION:
+            return "Remove or rename the previous declaration to avoid conflicts";
+        case ERROR_TYPE:
+            return "Check types or add an explicit cast/convert the expression";
+        case ERROR_SYNTAX:
+            return "Check syntax near the indicated location (missing token/parenthesis)";
+        case ERROR_LEXICAL:
+            return "Remove unsupported characters or fix the token spelling";
+        case ERROR_RUNTIME:
+            return "Verify runtime conditions (null/overflow) or add guards";
+        case ERROR_ARRAY_OUT_OF_BOUNDS:
+            return "Check index range before accessing the array";
+        default:
+            return NULL;
+    }
+}
+
+static int line_number_width(int line_number) {
+    int width = 1;
+    int n = line_number > 0 ? line_number : 1;
+    while (n >= 10) {
+        n /= 10;
+        width++;
+    }
+    return width;
+}
+
+static void print_suggestion_block(const char* suggestion) {
+    if (!suggestion) return;
+    fprintf(stderr, "%sHint%s %s%s%s\n", ANSI_BOLD ANSI_CYAN, ANSI_RESET, ANSI_CYAN, suggestion, ANSI_RESET);
+}
+
+static void print_diagnostic_header(ErrorLevel level, ErrorType error_type, const char* message) {
+    const char* level_str = (level == ERROR_LEVEL_WARNING) ? "WARNING" : "ERROR";
+    const char* level_bg = (level == ERROR_LEVEL_WARNING) ? ANSI_BG_YELLOW : ANSI_BG_RED;
+    const char* type_str = error_type_to_string(error_type);
+    const char* type_color = error_type_color(error_type);
+
+    fprintf(stderr,
+            "%s%s %s %s%s%s %s%s%s\n",
+            level_bg,
+            ANSI_BOLD,
+            level_str,
+            ANSI_RESET,
+            type_color,
+            type_str,
+            ANSI_RESET,
+            ANSI_BOLD,
+            ANSI_RESET);
+    fprintf(stderr,
+            "%s-->%s %s:%d:%d\n",
+            ANSI_BOLD ANSI_BLUE,
+            ANSI_RESET,
+            current_filename,
+            current_line,
+            current_column);
+    fprintf(stderr,
+            "%sMessage:%s %s\n",
+            ANSI_BOLD,
+            ANSI_RESET,
+            message ? message : "");
 }
 int get_error_count() {
     return error_count;
@@ -120,62 +278,23 @@ int get_warning_count() {
     return warning_count;
 }
 static void vreport_error(ErrorLevel level, ErrorType error_type, const char* format, va_list args) {
-    const char* level_str = "";
-    const char* error_type_str = "";
-    const char* color_code = "";
-    const char* reset_code = "\033[0m";
+    char message[1024];
     switch (level) {
         case ERROR_LEVEL_WARNING:
-            level_str = "warning";
-            color_code = "\033[33m"; // 黄色
             warning_count++;
             break;
         case ERROR_LEVEL_ERROR:
         case ERROR_LEVEL_FATAL:
-            level_str = "error";
-            color_code = "\033[31m"; // 红色
             error_count++;
             break;
     }
-    switch (error_type) {
-        case ERROR_SYNTAX:
-            error_type_str = "SyntaxError";
-            break;
-        case ERROR_LEXICAL:
-            error_type_str = "LexicalError";
-            break;
-        case ERROR_TYPE:
-            error_type_str = "TypeError";
-            break;
-        case ERROR_UNDEFINED:
-            error_type_str = "NameError";
-            break;
-        case ERROR_UNDEFINED_FUNC:
-            error_type_str = "NameError";
-            break;
-        case ERROR_REDEFINITION:
-            error_type_str = "RedefinitionError";
-            break;
-        case ERROR_SEMANTIC:
-            error_type_str = "SemanticError";
-            break;
-        case ERROR_RUNTIME:
-            error_type_str = "RuntimeError";
-            break;
-        case ERROR_WARNING:
-            error_type_str = "Warning";
-            break;
-        default:
-            error_type_str = "Error";
-            break;
+
+    vsnprintf(message, sizeof(message), format, args);
+    if (error_type == ERROR_SYNTAX) {
+        strncat(message, ". Check if all parentheses are properly closed", sizeof(message) - strlen(message) - 1);
     }
 
-    fprintf(stderr, "%s%s:%d:%d: %s: %s: ", color_code, current_filename, current_line, current_column, level_str, error_type_str);
-    vfprintf(stderr, format, args);
-    if (error_type == ERROR_SYNTAX) {
-        fprintf(stderr, ". Check if all parentheses are properly closed");
-    }
-    fprintf(stderr, "%s\n", reset_code);
+    print_diagnostic_header(level, error_type, message);
 
     /* Show source context (line and caret) when available */
     if (source_content && current_line > 0) {
@@ -186,92 +305,21 @@ static void vreport_error(ErrorLevel level, ErrorType error_type, const char* fo
         }
     }
 
-    /* Provide brief fix suggestions based on error type */
-    const char* suggestion = NULL;
-    switch (error_type) {
-        case ERROR_UNDEFINED:
-            suggestion = "Declare the identifier before use or check for typos";
-            break;
-        case ERROR_UNDEFINED_FUNC:
-            suggestion = "Ensure the function is declared and linked, or check its name";
-            break;
-        case ERROR_REDEFINITION:
-            suggestion = "Remove or rename the previous declaration to avoid conflicts";
-            break;
-        case ERROR_TYPE:
-            suggestion = "Check types or add an explicit cast/convert the expression";
-            break;
-        case ERROR_SYNTAX:
-            suggestion = "Check syntax near the indicated location (missing token/parenthesis)";
-            break;
-        case ERROR_LEXICAL:
-            suggestion = "Remove unsupported characters or fix the token spelling";
-            break;
-        case ERROR_RUNTIME:
-            suggestion = "Verify runtime conditions (null/overflow) or add guards";
-            break;
-        default:
-            suggestion = NULL;
-            break;
-    }
-
-    if (suggestion) {
-        fprintf(stderr, "%sFix: %s%s\n", color_code, suggestion, reset_code);
-    }
+    print_suggestion_block(get_suggestion(error_type));
 }
 
 void report_simple_error_with_length(ErrorLevel level, ErrorType error_type, const char* msg, int length) {
-    const char* level_str = "";
-    const char* error_type_str = "";
-    const char* color_code = "";
-    const char* reset_code = "\033[0m";
     switch (level) {
         case ERROR_LEVEL_WARNING:
-            level_str = "warning";
-            color_code = "\033[33m"; // 黄色
             warning_count++;
             break;
         case ERROR_LEVEL_ERROR:
         case ERROR_LEVEL_FATAL:
-            level_str = "error";
-            color_code = "\033[31m"; // 红色
             error_count++;
             break;
     }
-    switch (error_type) {
-        case ERROR_SYNTAX:
-            error_type_str = "SyntaxError";
-            break;
-        case ERROR_LEXICAL:
-            error_type_str = "LexicalError";
-            break;
-        case ERROR_TYPE:
-            error_type_str = "TypeError";
-            break;
-        case ERROR_UNDEFINED:
-            error_type_str = "NameError";
-            break;
-        case ERROR_UNDEFINED_FUNC:
-            error_type_str = "NameError";
-            break;
-        case ERROR_REDEFINITION:
-            error_type_str = "RedefinitionError";
-            break;
-        case ERROR_SEMANTIC:
-            error_type_str = "SemanticError";
-            break;
-        case ERROR_RUNTIME:
-            error_type_str = "RuntimeError";
-            break;
-        case ERROR_WARNING:
-            error_type_str = "Warning";
-            break;
-        default:
-            error_type_str = "Error";
-            break;
-    }
 
-    fprintf(stderr, "%s%s:%d:%d: %s: %s: %s%s\n", color_code, current_filename, current_line, current_column, level_str, error_type_str, msg, reset_code);
+    print_diagnostic_header(level, error_type, msg);
     if (source_content && current_line > 0) {
         if (current_column > 0) {
             show_error_context_with_column_and_length(current_line, current_column, length);
@@ -280,28 +328,7 @@ void report_simple_error_with_length(ErrorLevel level, ErrorType error_type, con
         }
     }
 
-    const char* suggestion = NULL;
-    switch (error_type) {
-        case ERROR_UNDEFINED:
-            suggestion = "Declare the identifier before use or check for typos";
-            break;
-        case ERROR_REDEFINITION:
-            suggestion = "Remove or rename the previous declaration to avoid conflicts";
-            break;
-        case ERROR_TYPE:
-            suggestion = "Check types or add an explicit cast/convert the expression";
-            break;
-        case ERROR_SYNTAX:
-            suggestion = "Check syntax near the indicated location (missing token/parenthesis)";
-            break;
-        default:
-            suggestion = NULL;
-            break;
-    }
-
-    if (suggestion) {
-        fprintf(stderr, "%sFix: %s%s\n", color_code, suggestion, reset_code);
-    }
+    print_suggestion_block(get_suggestion(error_type));
 }
 void report_simple_error(ErrorLevel level, ErrorType error_type, const char* msg) {
     report_simple_error_with_length(level, error_type, msg, 1);
@@ -357,10 +384,12 @@ void report_fatal_error(const char* format, ...) {
 
 void internal_error(const char* format, ...) {
     va_list args;
+    char message[1024];
     va_start(args, format);
-    fprintf(stderr, "\033[31mInternal compiler error at %s:%d:%d:\033[0m ", current_filename, current_line, current_column);
-    vfprintf(stderr, format, args);
-    fprintf(stderr, "\n");
+    vsnprintf(message, sizeof(message), format, args);
+    fprintf(stderr, "%s%s INTERNAL%s\n", ANSI_BG_RED, ANSI_BOLD ANSI_WHITE, ANSI_RESET);
+    fprintf(stderr, "%s-->%s %s:%d:%d\n", ANSI_BOLD ANSI_BLUE, ANSI_RESET, current_filename, current_line, current_column);
+    fprintf(stderr, "%sMessage:%s %s\n", ANSI_BOLD, ANSI_RESET, message);
 
     if (source_content && current_line > 0) {
         if (current_column > 0) {
@@ -648,7 +677,7 @@ void report_struct_field_missing_with_location_and_suggestion(const char* struct
     report_simple_error_with_length(ERROR_LEVEL_ERROR, ERROR_UNDEFINED, buffer, field_name ? (int)strlen(field_name) : 1);
 
     if (suggestion) {
-        fprintf(stderr, "Fix: did you mean '%s'?\n", suggestion);
+        fprintf(stderr, "%sHint%s did you mean '%s'?\n", ANSI_BOLD ANSI_CYAN, ANSI_RESET, suggestion);
     }
 
     current_filename = old_filename;

@@ -18,7 +18,38 @@ ASTNode* root;
 static ASTNode* create_default_value_for_type(ASTNode* type_node, YYLTYPE* loc);
 static ASTNode* build_type_alias_enum(const char* type_name, ASTNode* variants);
 static ASTNode* mark_type_alias_public(ASTNode* program);
+static ASTNode* clone_match_scrutinee(ASTNode* scrutinee);
 static ASTNode* build_match_desugared(ASTNode* scrutinee, ASTNode* arms);
+
+static int is_builtin_union_ctor_name(const char* name) {
+    if (!name) return 0;
+    return strcmp(name, "Some") == 0 || strcmp(name, "None") == 0 ||
+           strcmp(name, "Ok") == 0 || strcmp(name, "Err") == 0;
+}
+
+static ASTNode* prepend_binding_to_match_body(ASTNode* body, const char* bind_name, ASTNode* scrutinee) {
+    if (!body || !bind_name || !scrutinee) return body;
+
+    ASTNode* bind_left = create_identifier_node(bind_name);
+    ASTNode* bind_right = clone_match_scrutinee(scrutinee);
+    if (!bind_left || !bind_right) return body;
+
+    ASTNode* bind_decl = create_assign_node(bind_left, bind_right);
+    if (bind_decl) bind_decl->data.assign.is_declaration = 1;
+
+    ASTNode* wrapped = create_program_node();
+    add_statement_to_program(wrapped, bind_decl);
+
+    if (body->type == AST_PROGRAM) {
+        for (int i = 0; i < body->data.program.statement_count; i++) {
+            add_statement_to_program(wrapped, body->data.program.statements[i]);
+        }
+    } else {
+        add_statement_to_program(wrapped, body);
+    }
+
+    return wrapped;
+}
 
 typedef enum {
     GENERIC_KIND_FUNCTION = 0,
@@ -244,17 +275,51 @@ static ASTNode* build_match_desugared(ASTNode* scrutinee, ASTNode* arms) {
             continue;
         }
 
-        ASTNode* cond_left = clone_match_scrutinee(scrutinee);//克隆 scrutinee 以构建条件表达式，确保不修改原始 scrutinee
-        ASTNode* cond_right = clone_match_scrutinee(pattern);//克隆模式以构建条件表达式，确保不修改原始模式
-        if (!cond_right && pattern->type == AST_IDENTIFIER && pattern->data.identifier.name) {
-            cond_right = create_identifier_node(pattern->data.identifier.name);//如果模式是一个标识符但无法克隆，直接创建一个新的标识符节点
+        ASTNode* cond = NULL;
+
+        if (pattern->type == AST_CALL && pattern->data.call.func &&
+            pattern->data.call.func->type == AST_IDENTIFIER &&
+            pattern->data.call.func->data.identifier.name) {
+            const char* ctor_name = pattern->data.call.func->data.identifier.name;
+            ASTNode* cond_left = clone_match_scrutinee(scrutinee);
+            if (!cond_left) continue;
+
+            if (pattern->data.call.args && pattern->data.call.args->type == AST_EXPRESSION_LIST &&
+                pattern->data.call.args->data.expression_list.expression_count == 1) {
+                ASTNode* bind_arg = pattern->data.call.args->data.expression_list.expressions[0];
+                if (bind_arg && bind_arg->type == AST_IDENTIFIER && bind_arg->data.identifier.name) {
+                    body = prepend_binding_to_match_body(body, bind_arg->data.identifier.name, scrutinee);
+                }
+
+                /* Payload constructor pattern: treat as non-zero for Option/Result-like values. */
+                ASTNode* zero = create_num_int_node(0);
+                cond = create_binop_node(OP_NE, cond_left, zero);
+            } else {
+                ASTNode* cond_right = create_identifier_node(ctor_name);
+                if (is_builtin_union_ctor_name(ctor_name) && strcmp(ctor_name, "None") == 0) {
+                    cond_right = create_num_int_node(0);
+                }
+                cond = create_binop_node(OP_EQ, cond_left, cond_right);
+            }
+        } else {
+            ASTNode* cond_left = clone_match_scrutinee(scrutinee);//克隆 scrutinee 以构建条件表达式，确保不修改原始 scrutinee
+            ASTNode* cond_right = clone_match_scrutinee(pattern);//克隆模式以构建条件表达式，确保不修改原始模式
+            if (!cond_right && pattern->type == AST_IDENTIFIER && pattern->data.identifier.name) {
+                cond_right = create_identifier_node(pattern->data.identifier.name);//如果模式是一个标识符但无法克隆，直接创建一个新的标识符节点
+                if (is_builtin_union_ctor_name(pattern->data.identifier.name) &&
+                    strcmp(pattern->data.identifier.name, "None") == 0) {
+                    cond_right = create_num_int_node(0);
+                }
+            }
+
+            if (!cond_left || !cond_right) {
+                continue;
+            }
+
+            cond = create_binop_node(OP_EQ, cond_left, cond_right);//构建条件表达式：scrutinee == pattern
         }
 
-        if (!cond_left || !cond_right) {
-            continue;
-        }
-
-        ASTNode* cond = create_binop_node(OP_EQ, cond_left, cond_right);//构建条件表达式：scrutinee == pattern
+        if (!cond) continue;
         chain = create_if_node(cond, body, chain);//构建 if-else 链：if (xxxx == xxxxx) { body } else do_something_e
     }
 
@@ -274,9 +339,12 @@ build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
     struct ASTNode* node;
 }
 
+%define lr.type ielr
+
 %token <str> IDENTIFIER STRING
 %token STRUCT COLON
 %token TYPE_KW MATCH PIPE
+%token QUESTION
 %token CONST LET MUT GLOBAL
 %token IMPORT PUB
 %token <num_int> NUMBER_INT CHAR_LITERAL
@@ -303,13 +371,14 @@ build_match_desugared：将 match 表达式转换为嵌套的 ifelse 表达式
 %type <node> struct_fields struct_field struct_init_fields struct_init_field
 %type <node> type param_list function_definition pub_function_definition function_return_type
 %type <node> print_statement assignment_statement compound_assignment_statement
-%type <node> input_statement if_statement while_statement for_statement
+%type <node> if_statement while_statement for_statement
 %type <node> expression logical_expression comparison_expression additive_expression term factor power factor_unary
 %type <node> literal identifier toint_expression tofloat_expression input_expression
 %type <node> block_statement if_rest expression_list
 %type <node> lvalue
 %type <node> type_definition enum_variant_list match_statement match_arms match_arm match_arm_body match_target match_arm_pattern
 %type <node> generic_param_list generic_type_args enum_variant
+%type <node> type_list
 
 %nonassoc IF
 %nonassoc ELSE
@@ -348,6 +417,10 @@ statement
         $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
         $$->data.assign.is_declaration = 1;
     }
+    | LET identifier ASSIGN expression COLON type SEMICOLON {
+        $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
     | LET MUT identifier ASSIGN expression SEMICOLON {
         $$ = create_assign_node_with_yyltype($3, $5, (YYLTYPE*) &@$);
         $3->mutability = MUTABILITY_MUTABLE;
@@ -373,7 +446,6 @@ statement
         $3->mutability = MUTABILITY_MUTABLE;
         $$->data.assign.is_declaration = 1;
     }
-    | lvalue ASSIGN expression SEMICOLON { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON expression SEMICOLON { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON type ASSIGN expression SEMICOLON { 
         $$ = create_assign_node_with_yyltype($1, $5, (YYLTYPE*) &@$); 
@@ -403,13 +475,16 @@ statement
         $$->data.global_decl.is_public = 1;
     }
     | compound_assignment_statement SEMICOLON { $$ = $1; }
-    | input_statement SEMICOLON     { $$ = $1; }
     | if_statement                  { $$ = $1; }
     | while_statement               { $$ = $1; }
     | for_statement               { $$ = $1; }
     | print_statement               { $$ = $1; }
     | assignment_statement          { $$ = $1; }
     | LET identifier ASSIGN expression {
+        $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
+        $$->data.assign.is_declaration = 1;
+    }
+    | LET identifier ASSIGN expression COLON type {
         $$ = create_assign_node_with_yyltype($2, $4, (YYLTYPE*) &@$);
         $$->data.assign.is_declaration = 1;
     }
@@ -438,13 +513,11 @@ statement
         $3->mutability = MUTABILITY_MUTABLE;
         $$->data.assign.is_declaration = 1;
     }
-    | lvalue ASSIGN expression { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON expression { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     | identifier COLON type ASSIGN expression { 
         $$ = create_assign_node_with_yyltype($1, $5, (YYLTYPE*) &@$); 
     }
     | compound_assignment_statement { $$ = $1; }
-    | input_statement               { $$ = $1; }
     | pub_function_definition           { $$ = $1; }
     | function_definition           { $$ = $1; }
     | extern_block                 { $$ = $1; }
@@ -600,6 +673,13 @@ match_arm
 match_arm_pattern
     : identifier { $$ = $1; }
     | literal { $$ = $1; }
+    | IDENTIFIER LPAREN IDENTIFIER RPAREN {
+        ASTNode* ctor = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        ASTNode* args = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        ASTNode* bind_id = create_identifier_node_with_yyltype($3, (YYLTYPE*) &@$);
+        add_expression_to_list(args, bind_id);
+        $$ = create_call_node_with_yyltype(ctor, args, (YYLTYPE*) &@$);
+    }
     ;
 
 match_arm_body
@@ -640,6 +720,18 @@ struct_init_fields
     | struct_init_fields struct_init_field { add_expression_to_list($1, $2); $$ = $1; }
     ;
 
+type_list
+    : type {
+        ASTNode* list = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(list, $1);
+        $$ = list;
+    }
+    | type_list COMMA type {
+        add_expression_to_list($1, $3);
+        $$ = $1;
+    }
+    ;
+
 type
     : TYPE_I32 { $$ = create_type_node(AST_TYPE_INT32); }
     | TYPE_I64 { $$ = create_type_node(AST_TYPE_INT64); }
@@ -658,8 +750,17 @@ type
     | AMPERSAND IDENTIFIER { $$ = create_type_node(AST_TYPE_POINTER); }
     | LBRACKET type MULTIPLY NUMBER_INT RBRACKET { $$ = create_fixed_size_list_type_node($2, $4); }
     | LBRACKET type RBRACKET { $$ = create_list_type_node($2); }
+    | QUESTION type { $$ = create_type_node(AST_TYPE_POINTER); }
+    | FN LPAREN RPAREN COLON type { $$ = create_type_node(AST_TYPE_POINTER); }
+    | FN LPAREN type_list RPAREN COLON type { $$ = create_type_node(AST_TYPE_POINTER); }
+    | LPAREN type_list RPAREN { $$ = create_type_node(AST_TYPE_POINTER); }
     | IDENTIFIER {
         $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); 
+    }
+    | IDENTIFIER LBRACKET generic_type_args RBRACKET {
+        check_generic_arity_usage($1, GENERIC_KIND_STRUCT, $3, (YYLTYPE*) &@$);
+        check_generic_arity_usage($1, GENERIC_KIND_TYPE, $3, (YYLTYPE*) &@$);
+        $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
     }
     | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET {
         check_generic_arity_usage($1, GENERIC_KIND_STRUCT, $4, (YYLTYPE*) &@$);
@@ -864,14 +965,21 @@ print_statement
     ;
 
 assignment_statement
-    : identifier ASSIGN expression  { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
+    : lvalue ASSIGN expression  { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
+    | IDENTIFIER LBRACKET expression RBRACKET ASSIGN expression {
+        ASTNode* target = create_index_node_with_yyltype(
+            create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$),
+            $3,
+            (YYLTYPE*) &@$);
+        $$ = create_assign_node_with_yyltype(target, $6, (YYLTYPE*) &@$);
+    }
     ;
 
 lvalue
     : identifier                    { $$ = $1; }
-    | factor_unary DOT identifier   { $$ = create_member_access_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
-    | factor_unary LBRACKET expression RBRACKET { $$ = create_index_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
-    | AT factor_unary               { $$ = create_unaryop_node(OP_DEREF, $2); }
+    | lvalue DOT identifier         { $$ = create_member_access_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
+    | lvalue LBRACKET expression RBRACKET { $$ = create_index_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
+    | AT lvalue                     { $$ = create_unaryop_node(OP_DEREF, $2); }
     ;
 
 compound_assignment_statement
@@ -900,12 +1008,6 @@ compound_assignment_statement
                                                ASTNode* binop = create_binop_node_with_yyltype(OP_MOD, left, $3, (YYLTYPE*) &@$);
                                                $$ = create_assign_node_with_yyltype($1, binop, (YYLTYPE*) &@$);
                                              }
-    ;
-
-input_statement
-    : identifier ASSIGN input_expression { 
-        $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); 
-    }
     ;
 
 block_statement
@@ -951,6 +1053,11 @@ for_statement
         ASTNode* start = $5;
         ASTNode* end = $7;
         $$ = create_for_node_with_yyltype($3, start, end, $9, (YYLTYPE*) &@$);
+    }
+    | FOR LPAREN identifier IN expression RPAREN block_statement {
+        ASTNode* var = $3;
+        ASTNode* iterable = $5;
+        $$ = create_for_node_with_yyltype(var, iterable, NULL, $7, (YYLTYPE*) &@$);
     }
     | FOR LPAREN identifier SEMICOLON expression RPAREN block_statement {
         ASTNode* var = $3;
@@ -1000,6 +1107,7 @@ comparison_expression
 
 expression
     : logical_expression                    { $$ = $1; }
+    | lvalue ASSIGN expression              { $$ = create_assign_node_with_yyltype($1, $3, (YYLTYPE*) &@$); }
     ;
 
 additive_expression
@@ -1029,9 +1137,34 @@ factor_unary
         ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); 
         $$ = create_call_node_with_yyltype(id, NULL, (YYLTYPE*) &@$); 
     }
+    | IDENTIFIER LPAREN expression COMMA FN LPAREN IDENTIFIER COLON type RPAREN COLON type LBRACE statement_list RBRACE RPAREN {
+        static int lambda_counter = 0;
+        char name_buf[64];
+        snprintf(name_buf, sizeof(name_buf), "__lambda_%d", lambda_counter++);
+
+        ASTNode* params = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        ASTNode* id_node = create_identifier_node_with_yyltype($7, (YYLTYPE*) &@$);
+        ASTNode* annotated_param = create_assign_node_with_yyltype(id_node, $9, (YYLTYPE*) &@$);
+        annotated_param->data.assign.is_declaration = 2;
+        add_expression_to_list(params, annotated_param);
+
+        ASTNode* lambda_fn = create_function_node(name_buf, params, $12, $14);
+        lambda_fn->data.function.is_public = 0;
+
+        ASTNode* args = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(args, $3);
+        add_expression_to_list(args, lambda_fn);
+
+        ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        $$ = create_call_node_with_yyltype(id, args, (YYLTYPE*) &@$);
+    }
     | IDENTIFIER LPAREN expression_list RPAREN { 
         ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$); 
         $$ = create_call_node_with_yyltype(id, $3, (YYLTYPE*) &@$); 
+    }
+    | IDENTIFIER LBRACKET expression RBRACKET {
+        ASTNode* id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+        $$ = create_index_node_with_yyltype(id, $3, (YYLTYPE*) &@$);
     }
     | IDENTIFIER COLON LBRACKET generic_type_args RBRACKET LPAREN RPAREN {
         check_generic_arity_usage($1, GENERIC_KIND_FUNCTION, $4, (YYLTYPE*) &@$);
@@ -1058,8 +1191,39 @@ factor_unary
         ASTNode* type_id = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
         $$ = create_struct_literal_node_with_yyltype(type_id, $7, (YYLTYPE*) &@$);
     }
+    | IDENTIFIER {
+        $$ = create_identifier_node_with_yyltype($1, (YYLTYPE*) &@$);
+    }
+    | FN LPAREN IDENTIFIER COLON type RPAREN function_return_type block_statement {
+        static int lambda_counter = 0;
+        char name_buf[64];
+        snprintf(name_buf, sizeof(name_buf), "__lambda_%d", lambda_counter++);
+        ASTNode* params = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        ASTNode* id_node = create_identifier_node_with_yyltype($3, (YYLTYPE*) &@$);
+        ASTNode* annotated_param = create_assign_node_with_yyltype(id_node, $5, (YYLTYPE*) &@$);
+        annotated_param->data.assign.is_declaration = 2;
+        add_expression_to_list(params, annotated_param);
+        ASTNode* fn = create_function_node(name_buf, params, $7, $8);
+        fn->data.function.is_public = 0;
+        $$ = fn;
+    }
+    | FN LPAREN param_list RPAREN function_return_type block_statement {
+        static int lambda_counter = 0;
+        char name_buf[64];
+        snprintf(name_buf, sizeof(name_buf), "__lambda_%d", lambda_counter++);
+        ASTNode* fn = create_function_node(name_buf, $3, $5, $6);
+        fn->data.function.is_public = 0;
+        $$ = fn;
+    }
+    | FN LPAREN RPAREN function_return_type block_statement {
+        static int lambda_counter = 0;
+        char name_buf[64];
+        snprintf(name_buf, sizeof(name_buf), "__lambda_%d", lambda_counter++);
+        ASTNode* fn = create_function_node(name_buf, NULL, $4, $5);
+        fn->data.function.is_public = 0;
+        $$ = fn;
+    }
     | literal                       { $$ = $1; }
-    | identifier                    { $$ = $1; }
     | toint_expression              { $$ = $1; }
     | tofloat_expression            { $$ = $1; }
     | input_expression              { $$ = $1; }
@@ -1069,7 +1233,22 @@ factor_unary
     | AMPERSAND factor_unary        { $$ = create_unaryop_node(OP_ADDRESS, $2); }
     | AT factor_unary               { $$ = create_unaryop_node(OP_DEREF, $2); }
     | LPAREN expression RPAREN      { $$ = $2; }
+    | LPAREN expression COMMA expression_list RPAREN {
+        ASTNode* tuple = create_expression_list_node_with_yyltype((YYLTYPE*) &@$);
+        add_expression_to_list(tuple, $2);
+        if ($4 && $4->type == AST_EXPRESSION_LIST) {
+            for (int i = 0; i < $4->data.expression_list.expression_count; i++) {
+                add_expression_to_list(tuple, $4->data.expression_list.expressions[i]);
+            }
+        }
+        $$ = tuple;
+    }
     | factor_unary DOT IDENTIFIER { $$ = create_member_access_node_with_yyltype($1, create_identifier_node_with_yyltype($3, (YYLTYPE*) &@$), (YYLTYPE*) &@$); }
+    | factor_unary DOT NUMBER_INT {
+        char idx_name[32];
+        snprintf(idx_name, sizeof(idx_name), "%lld", $3);
+        $$ = create_member_access_node_with_yyltype($1, create_identifier_node_with_yyltype(idx_name, (YYLTYPE*) &@$), (YYLTYPE*) &@$);
+    }
     | factor_unary DOT IDENTIFIER LPAREN RPAREN { 
         ASTNode* method = create_identifier_node_with_yyltype($3, (YYLTYPE*) &@$);
         ASTNode* mem = create_member_access_node_with_yyltype($1, method, (YYLTYPE*) &@$);

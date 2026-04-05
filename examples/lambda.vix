@@ -1,0 +1,21 @@
+fn map:[T, U](list: [T], f: fn(T): U): [U]
+{
+    let out = []
+    for (item in list)
+    {
+        out.push(f(item))
+    }
+    return out
+}
+
+fn main(): i32
+{
+    let nums = [1, 2, 3]
+    let doubled = map:[i32, i32](nums, fn(x: i32): i32 { x * 2 })
+
+    print(doubled[0])
+    print(doubled[1])
+    print(doubled[2])
+
+    return 0
+}

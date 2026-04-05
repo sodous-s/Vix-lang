@@ -134,6 +134,7 @@ static int decode_char_literal(const char* text, size_t len, unsigned char* out)
                       } 
 
 "#"[ \t]*"["[^]\n]*"]" { UPDATE_COLUMN(); }
+"//"[^\n]*         { UPDATE_COLUMN(); }
 
 "print"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return PRINT; }
 "input"             { UPDATE_COLUMN(); yylval.str = strdup(yytext); return INPUT; }
@@ -210,6 +211,7 @@ static int decode_char_literal(const char* text, size_t len, unsigned char* out)
 "."                 { UPDATE_COLUMN(); return DOT; }
 ":"                 { UPDATE_COLUMN(); return COLON; }
 "|"                 { UPDATE_COLUMN(); return PIPE; }
+"?"                 { UPDATE_COLUMN(); return QUESTION; }
 
 [a-zA-Z_][a-zA-Z0-9_]*!?  {
                         int col = GET_FIRST_COLUMN();
@@ -277,8 +279,6 @@ static int decode_char_literal(const char* text, size_t len, unsigned char* out)
                         yylloc.last_column = col + yyleng - 1;
                         return CHAR_LITERAL;
                       }
-
-"//".*              { UPDATE_COLUMN(); } 
 
 "/"[*]([^*]|[*]+[^*/])*[*]+"/"  { UPDATE_COLUMN(); } 
 

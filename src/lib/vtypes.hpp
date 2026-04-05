@@ -108,7 +108,7 @@ public:
         _scalar_from_string = false;
         return v;
     }
-    VList& pop_inplace() {
+    VList& pop_inplace(){
         if (!items.empty()) {
             items.pop_back();
         }

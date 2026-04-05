@@ -8,6 +8,12 @@
 extern const char* current_input_filename;
 static int extract_public_functions_from_module(const char* module_path, SymbolTable* table);
 
+static int is_builtin_union_ctor_name(const char* name) {
+    if (!name) return 0;
+    return strcmp(name, "Some") == 0 || strcmp(name, "None") == 0 ||
+           strcmp(name, "Ok") == 0 || strcmp(name, "Err") == 0;
+}
+
 static const char* node_source_filename(const ASTNode* node) {
     if (node && node->source_file) {
         return node->source_file;
@@ -485,19 +491,10 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
                     break;
                 }
                 if (in_struct_def_field) {
-                    if (node->data.assign.right->type == AST_IDENTIFIER) {
-                        const char* type_name = node->data.assign.right->data.identifier.name;
-                        StructDef* struct_def = find_struct_definition(type_name);
-                        if (!struct_def) {
-                            const char* filename = current_input_filename ? current_input_filename : "unknown";
-                            int line = (node->data.assign.right->location.first_line > 0) ? node->data.assign.right->location.first_line : 1;
-                            int column = (node->data.assign.right->location.first_column > 0) ? node->data.assign.right->location.first_column : 1;
-                            report_undefined_identifier_with_location_and_column(type_name, filename, line, column);
-                            errors_found++;
-                        }
-                    } else {
-                        errors_found += check_undefined_symbols_in_node_with_visited(node->data.assign.right, table, new_visited_list);
-                    }
+                    /*
+                    结构体字段的右侧是类型注解，允许泛型参数、联合类型、函数类型、元组类型等。
+                    这里不按“变量/函数标识符必须已定义”规则检查，避免误报。
+                    */
                 } else {
                     errors_found += check_undefined_symbols_in_node_with_visited(node->data.assign.right, table, new_visited_list);
                 }
@@ -528,6 +525,9 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
         }
         
         case AST_IDENTIFIER: {
+            if (is_builtin_union_ctor_name(node->data.identifier.name)) {
+                break;
+            }
             Symbol* sym = lookup_symbol(table, node->data.identifier.name);
             if (!sym) {
                 const char* filename = node_source_filename(node);
@@ -568,6 +568,12 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
         
         case AST_CALL: {
             if (node->data.call.func && node->data.call.func->type == AST_IDENTIFIER) {
+                if (is_builtin_union_ctor_name(node->data.call.func->data.identifier.name)) {
+                    if (node->data.call.args) {
+                        errors_found += check_undefined_symbols_in_node_with_visited(node->data.call.args, table, new_visited_list);
+                    }
+                    break;
+                }
                 Symbol* sym = lookup_symbol(table, node->data.call.func->data.identifier.name);
                 if (!sym) {
                     const char* filename = node_source_filename(node->data.call.func);
@@ -754,9 +760,21 @@ static int check_undefined_symbols_in_node_with_visited(ASTNode* node, SymbolTab
         
         case AST_IF: {
             errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.condition, table, new_visited_list);
-            errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.then_body, table, new_visited_list);
+            SymbolTable* then_scope = create_symbol_table(table);
+            if (then_scope) {
+                errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.then_body, then_scope, new_visited_list);
+                destroy_symbol_table(then_scope);
+            } else {
+                errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.then_body, table, new_visited_list);
+            }
             if (node->data.if_stmt.else_body) {
-                errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.else_body, table, new_visited_list);
+                SymbolTable* else_scope = create_symbol_table(table);
+                if (else_scope) {
+                    errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.else_body, else_scope, new_visited_list);
+                    destroy_symbol_table(else_scope);
+                } else {
+                    errors_found += check_undefined_symbols_in_node_with_visited(node->data.if_stmt.else_body, table, new_visited_list);
+                }
             }
             break;
         }

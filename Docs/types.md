@@ -431,6 +431,66 @@ let result = getValue()  // result 推断为 i32
 
 ## 类型转换
 
+---
+
+## 新增类型语法（2026-03）
+
+### 可选类型
+
+`?T` 用于表示可为空值的类型（在当前实现中以指针语义承载）：
+
+```vix
+fn lookup:[T](table: SymbolTable:[T], name: string): ?T {
+    return None
+}
+```
+
+### 函数类型
+
+支持将函数作为一等值传递：
+
+```vix
+fn map:[T,U](list: [T], f: fn(T): U): [U] {
+    ...
+}
+```
+
+### 联合类型
+
+支持带泛型参数的联合类型定义：
+
+```vix
+type Result:[T,U] = Ok(T) | Err(E)
+```
+
+并可与 `match` 一起使用：
+
+```vix
+let ok = Ok(42) : Result[i32, string]
+match ok {
+    Ok(v) -> print(v)
+    Err(e) -> print(e)
+}
+```
+
+### 泛型类型参数写法
+
+声明侧支持 `:[T]`；使用侧支持 `:[Type]`：
+
+```vix
+struct SymbolTable[T] { ... }
+let tab = new_table:[Type]()
+```
+### 泛型类型参数写法
+
+声明侧支持 `:[T]`；使用侧支持 `:[Type]`：
+
+```vix
+struct SymbolTable:[T] { ... }
+let tab = new_table:[Type]()
+```
+## 数据转换
+
 Vix 提供内置函数进行类型转换。
 
 ### 字符串转数字

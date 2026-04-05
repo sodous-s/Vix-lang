@@ -20,8 +20,6 @@ vix0.0.1 released!
 #include <stdio.h>
 #include <map>
 #include <string>
-#include <vector>
-#include <stack>
 #include <iostream>
 #include <cstdint>
 #include <cstdlib>
@@ -31,6 +29,10 @@ using namespace llvm;
 
 extern "C" const char* current_input_filename;
 extern "C" void report_semantic_error_with_location(const char* message, const char* filename, int line);
+
+static bool isBuiltinUnionCtorName(const std::string& name) {
+    return name == "Some" || name == "None" || name == "Ok" || name == "Err";
+}
 
 static std::string g_vix_target_triple;
 
@@ -544,6 +546,9 @@ private:
 
 // ==================== LLVM EMITTER ====================
 class LLVMCodeGenerator {
+public:
+    struct VisitResult;
+
 private:
     LLVMContext context;
     IRBuilder<> builder;
@@ -558,9 +563,11 @@ private:
     std::map<std::string, std::vector<int>> functionArrayParamPositions;
     std::map<std::string, StructType*> functionSRetResultTypesByName;
     std::map<Function*, StructType*> functionSRetResultTypesByFunc;
+    std::map<std::string, Type*> functionArrayReturnElementTypes;
     std::map<std::string, ASTNode*> genericFunctionTemplates;
     std::map<std::string, int> genericFunctionArity;
     std::map<std::string, Type*> activeGenericTypeBindings;
+    std::map<const Value*, Type*> pointerElementHints;
     std::vector<BasicBlock*> loopBreakTargets;
     std::vector<BasicBlock*> loopContinueTargets;
 
@@ -649,7 +656,18 @@ private:
         if (!fnNode || fnNode->type != AST_FUNCTION) return false;
         ASTNode* genericParams = fnNode->data.function.generic_params;
         if (!genericParams || genericParams->type != AST_EXPRESSION_LIST) return false;
-        if (!typeArgs || typeArgs->type != AST_EXPRESSION_LIST) return false;
+        if (!typeArgs) {
+            int paramCount = genericParams->data.expression_list.expression_count;
+            for (int i = 0; i < paramCount; i++) {
+                ASTNode* p = genericParams->data.expression_list.expressions[i];
+                if (!p || p->type != AST_IDENTIFIER || !p->data.identifier.name) {
+                    return false;
+                }
+                outBindings[p->data.identifier.name] = Type::getInt32Ty(context);
+            }
+            return true;
+        }
+        if (typeArgs->type != AST_EXPRESSION_LIST) return false;
 
         int paramCount = genericParams->data.expression_list.expression_count;
         int argCount = typeArgs->data.expression_list.expression_count;
@@ -911,6 +929,86 @@ private:
         }
 
         return ConstantInt::get(Type::getInt32Ty(context), 0);
+    }
+
+    AllocaInst* findRuntimeArrayLengthSlot(const std::string& varName) {
+        std::string lenVarName = varName + "__len";
+        AllocaInst* lenAlloc = scopeManager.findVariable(lenVarName);
+        if (!lenAlloc) lenAlloc = findVariableInMain(lenVarName);
+        return lenAlloc;
+    }
+
+    AllocaInst* ensureRuntimeArrayLengthSlot(const std::string& varName, int initialLen) {
+        AllocaInst* existing = findRuntimeArrayLengthSlot(varName);
+        if (existing) return existing;
+
+        Function* func = getCurrentFunction();
+        if (!func) {
+            func = module->getFunction("main");
+            if (!func) {
+                createDefaultMain();
+                func = module->getFunction("main");
+            }
+        }
+        if (!func) return nullptr;
+
+        BasicBlock* entryBB = &func->getEntryBlock();
+        BasicBlock* savedBB = builder.GetInsertBlock();
+
+        std::string lenVarName = varName + "__len";
+        IRBuilder<> tempBuilder(entryBB, entryBB->begin());
+        AllocaInst* lenAlloc = tempBuilder.CreateAlloca(Type::getInt32Ty(context), nullptr, lenVarName);
+        tempBuilder.CreateStore(ConstantInt::get(Type::getInt32Ty(context), initialLen), lenAlloc);
+
+        if (savedBB) {
+            builder.SetInsertPoint(savedBB);
+        }
+
+        scopeManager.defineVariable(lenVarName, lenAlloc);
+        return lenAlloc;
+    }
+
+    Function* getOrCreateReallocFunction() {
+        if (Function* fn = module->getFunction("realloc")) {
+            return fn;
+        }
+
+        Type* i8PtrTy = PointerType::getUnqual(Type::getInt8Ty(context));
+        Type* i64Ty = Type::getInt64Ty(context);
+        FunctionType* reallocType = FunctionType::get(i8PtrTy, {i8PtrTy, i64Ty}, false);
+        Function* reallocFn = Function::Create(reallocType, Function::ExternalLinkage, "realloc", module.get());
+        reallocFn->setCallingConv(CallingConv::C);
+        return reallocFn;
+    }
+
+    VisitResult emitFunctionPointerCall(Value* rawCalleePtr, ASTNode* argsNode) {
+        if (!rawCalleePtr || !rawCalleePtr->getType()->isPointerTy()) return VisitResult();
+
+        std::vector<Value*> argValues;
+        std::vector<Type*> argTypes;
+        if (argsNode && argsNode->type == AST_EXPRESSION_LIST) {
+            int argCount = argsNode->data.expression_list.expression_count;
+            for (int i = 0; i < argCount; i++) {
+                ASTNode* argNode = argsNode->data.expression_list.expressions[i];
+                VisitResult argRes = visit(argNode);
+                if (!argRes.value) return VisitResult();
+                argValues.push_back(argRes.value);
+                argTypes.push_back(argRes.value->getType());
+            }
+        }
+
+        Type* returnType = Type::getInt32Ty(context);
+        if (!argTypes.empty()) {
+            Type* firstArgType = argTypes[0];
+            if (firstArgType->isIntegerTy() || firstArgType->isPointerTy() || firstArgType->isFloatingPointTy()) {
+                returnType = firstArgType;
+            }
+        }
+
+        FunctionType* fnType = FunctionType::get(returnType, argTypes, false);
+        Value* typedFnPtr = builder.CreateBitCast(rawCalleePtr, PointerType::getUnqual(fnType), "fnptr_cast");
+        CallInst* callInst = builder.CreateCall(fnType, typedFnPtr, argValues, "fpcalltmp");
+        return VisitResult(callInst, typeHelper.getValueTypeFromType(returnType));
     }
 
     Constant* evaluateConstExpr(ASTNode* node, ValueType* outType = nullptr) {
@@ -1241,6 +1339,13 @@ public:
         if (!node || !node->data.identifier.name) return VisitResult();
         
         std::string name(node->data.identifier.name);
+        if (name == "None") {
+            Value* nil = ConstantPointerNull::get(PointerType::getUnqual(Type::getInt8Ty(context)));
+            return VisitResult(nil, ValueType::POINTER);
+        }
+        if (name == "Some" || name == "Ok" || name == "Err") {
+            return VisitResult(ConstantInt::get(Type::getInt32Ty(context), 0), ValueType::INT32);
+        }
         AllocaInst* alloc = scopeManager.findVariable(name);
         
         if (!alloc) {
@@ -1983,6 +2088,13 @@ public:
                 }
             }
 
+            auto hintIt = pointerElementHints.find(rightVal.value);
+            if (hintIt != pointerElementHints.end() && hintIt->second &&
+                node->data.assign.right->type != AST_EXPRESSION_LIST) {
+                typeHelper.registerArrayType(name, hintIt->second, -1);
+                typeHelper.registerVariableArraySize(name, -1);
+            }
+
             if (inferredPointerElementType) {
                 typeHelper.registerArrayType(name, inferredPointerElementType, -1);
             }//如果是字符串赋值 也注册为字符串变量
@@ -2465,9 +2577,163 @@ public:
         ASTNode* start_node = node->data.for_stmt.start;
         ASTNode* end_node = node->data.for_stmt.end;
         ASTNode* body_node = node->data.for_stmt.body;
-        if (!var_node || !start_node || !end_node || !body_node) return VisitResult();
+        if (!var_node || !start_node || !body_node) return VisitResult();
         if (var_node->type != AST_IDENTIFIER) return VisitResult();
         std::string var_name(var_node->data.identifier.name);
+
+        if (!end_node) {
+            std::string iterableName;
+            if (start_node->type == AST_IDENTIFIER && start_node->data.identifier.name) {
+                iterableName = start_node->data.identifier.name;
+            }
+
+            VisitResult iterableRes = visit(start_node);
+            if (!iterableRes.value || !iterableRes.value->getType()->isPointerTy()) {
+                return VisitResult();
+            }
+
+            BasicBlock* entryBB = &func->getEntryBlock();
+            BasicBlock* savedBB = builder.GetInsertBlock();
+            IRBuilder<> tempBuilder(entryBB, entryBB->begin());
+
+            Type* iterPtrTy = iterableRes.value->getType();
+            AllocaInst* iterPtrAlloc = tempBuilder.CreateAlloca(iterPtrTy, nullptr, var_name + "__iterable");
+            if (savedBB) builder.SetInsertPoint(savedBB);
+            builder.CreateStore(iterableRes.value, iterPtrAlloc);
+
+            Type* elemType = nullptr;
+            if (!iterableName.empty()) {
+                AllocaInst* iterAlloc = scopeManager.findVariable(iterableName);
+                if (!iterAlloc) iterAlloc = findVariableInMain(iterableName);
+                if (iterAlloc) {
+                    Type* iterAllocType = getActualType(iterAlloc);
+                    if (iterAllocType && iterAllocType->isPointerTy()) {
+                        elemType = getPointerElementTypeSafely(dyn_cast<PointerType>(iterAllocType), iterableName);
+                    }
+                }
+            }
+            if (!elemType) {
+                auto hintIt = pointerElementHints.find(iterableRes.value);
+                if (hintIt != pointerElementHints.end() && hintIt->second) {
+                    elemType = hintIt->second;
+                }
+            }
+            if (!elemType) {
+                elemType = Type::getInt8Ty(context);
+            }
+            ValueType elemVT = typeHelper.getValueTypeFromType(elemType);
+
+            Value* iterLen = nullptr;
+            if (!iterableName.empty()) {
+                iterLen = getRuntimeArrayLengthValue(iterableName);
+                if (!iterLen) {
+                    if (auto* info = typeHelper.getArrayTypeInfo(iterableName)) {
+                        if (info->second >= 0) {
+                            iterLen = ConstantInt::get(Type::getInt32Ty(context), info->second);
+                        }
+                    }
+                }
+            }
+
+            if (!iterLen) {
+                if (start_node->type == AST_EXPRESSION_LIST) {
+                    iterLen = ConstantInt::get(
+                        Type::getInt32Ty(context),
+                        start_node->data.expression_list.expression_count
+                    );
+                }
+            }
+            if (!iterLen) {
+                Value* iterPtrNow = builder.CreateLoad(iterPtrTy, iterPtrAlloc, var_name + "__iterable_now");
+                Value* isNull = builder.CreateIsNull(iterPtrNow, var_name + "__iterable_null");
+                iterLen = builder.CreateSelect(
+                    isNull,
+                    ConstantInt::get(Type::getInt32Ty(context), 0),
+                    ConstantInt::get(Type::getInt32Ty(context), 1),
+                    var_name + "__iterable_fallback_len"
+                );
+            }
+
+            AllocaInst* var_alloc = scopeManager.findVariable(var_name);
+            if (!var_alloc) {
+                BasicBlock* savedBB2 = builder.GetInsertBlock();
+                IRBuilder<> tempBuilder2(entryBB, entryBB->begin());
+                var_alloc = tempBuilder2.CreateAlloca(elemType, nullptr, var_name);
+                if (savedBB2) builder.SetInsertPoint(savedBB2);
+                scopeManager.defineVariable(var_name, var_alloc);
+            }
+            if (elemType->isPointerTy()) {
+                typeHelper.registerArrayType(var_name, elemType, -1);
+            }
+
+            BasicBlock* savedBB3 = builder.GetInsertBlock();
+            IRBuilder<> tempBuilder3(entryBB, entryBB->begin());
+            AllocaInst* idx_alloc = tempBuilder3.CreateAlloca(Type::getInt32Ty(context), nullptr, var_name + "__idx");
+            if (savedBB3) builder.SetInsertPoint(savedBB3);
+            builder.CreateStore(ConstantInt::get(Type::getInt32Ty(context), 0), idx_alloc);
+
+            BasicBlock* condBB = BasicBlock::Create(context, "forin_cond", func);
+            BasicBlock* loopBB = BasicBlock::Create(context, "forin_body");
+            BasicBlock* incBB = BasicBlock::Create(context, "forin_inc");
+            BasicBlock* afterBB = BasicBlock::Create(context, "forin_cont");
+
+            builder.CreateBr(condBB);
+            builder.SetInsertPoint(condBB);
+            Value* curIdx = builder.CreateLoad(Type::getInt32Ty(context), idx_alloc, var_name + "__idx_val");
+            Value* cond = builder.CreateICmpSLT(curIdx, iterLen, "forin_cond_cmp");
+            func->insert(func->end(), loopBB);
+            func->insert(func->end(), incBB);
+            func->insert(func->end(), afterBB);
+            builder.CreateCondBr(cond, loopBB, afterBB);
+
+            builder.SetInsertPoint(loopBB);
+            Value* arrPtr = builder.CreateLoad(iterPtrTy, iterPtrAlloc, var_name + "__iter_ptr");
+            Value* isNull = builder.CreateIsNull(arrPtr, "forin_arr_null");
+
+            BasicBlock* bodyNullBB = BasicBlock::Create(context, "forin_body_null", func);
+            BasicBlock* bodyLoadBB = BasicBlock::Create(context, "forin_body_load", func);
+            BasicBlock* bodyJoinBB = BasicBlock::Create(context, "forin_body_join", func);
+            builder.CreateCondBr(isNull, bodyNullBB, bodyLoadBB);
+
+            builder.SetInsertPoint(bodyNullBB);
+            Value* nullElem = Constant::getNullValue(elemType);
+            builder.CreateBr(bodyJoinBB);
+
+            builder.SetInsertPoint(bodyLoadBB);
+            Value* idxForLoad = builder.CreateLoad(Type::getInt32Ty(context), idx_alloc, var_name + "__idx_cur");
+            Value* elemPtr = builder.CreateInBoundsGEP(elemType, arrPtr, idxForLoad, "forin_elem_ptr");
+            Value* loadedElem = builder.CreateLoad(elemType, elemPtr, "forin_elem");
+            builder.CreateBr(bodyJoinBB);
+
+            builder.SetInsertPoint(bodyJoinBB);
+            PHINode* iterElem = builder.CreatePHI(elemType, 2, "forin_elem_phi");
+            iterElem->addIncoming(nullElem, bodyNullBB);
+            iterElem->addIncoming(loadedElem, bodyLoadBB);
+            Value* castedElem = typeHelper.castValue(builder, iterElem, elemVT, elemVT);
+            builder.CreateStore(castedElem, var_alloc);
+
+            loopBreakTargets.push_back(afterBB);
+            loopContinueTargets.push_back(incBB);
+            scopeManager.enterScope();
+            visit(body_node);
+            scopeManager.exitScope();
+            loopContinueTargets.pop_back();
+            loopBreakTargets.pop_back();
+
+            if (!builder.GetInsertBlock()->getTerminator()) {
+                builder.CreateBr(incBB);
+            }
+
+            builder.SetInsertPoint(incBB);
+            Value* curIdxForInc = builder.CreateLoad(Type::getInt32Ty(context), idx_alloc, var_name + "__idx_inc");
+            Value* nextIdx = builder.CreateAdd(curIdxForInc, ConstantInt::get(Type::getInt32Ty(context), 1), "forin_idx_next");
+            builder.CreateStore(nextIdx, idx_alloc);
+            builder.CreateBr(condBB);
+
+            builder.SetInsertPoint(afterBB);
+            return VisitResult();
+        }
+
         VisitResult start_val = visit(start_node);
         if (!start_val.value) return VisitResult();
         VisitResult end_val = visit(end_node);
@@ -2502,9 +2768,11 @@ public:
         builder.CreateBr(condBB);
         builder.SetInsertPoint(condBB);
         Value* cur_val = builder.CreateLoad(Type::getInt32Ty(context), var_alloc, var_name);
-        Value* cond = builder.CreateICmpSLT(cur_val, end_val_casted, "forcond");
-        VIX_DEBUG_LOG << "[DEBUG] for cond: " << *cur_val->getType()
-                     << " < " << *end_val_casted->getType() << "\n";
+        Value* descending = builder.CreateICmpSGT(start_val_casted, end_val_casted, "for_desc");
+        Value* ascCond = builder.CreateICmpSLE(cur_val, end_val_casted, "forcond_asc");
+        Value* descCond = builder.CreateICmpSGE(cur_val, end_val_casted, "forcond_desc");
+        Value* cond = builder.CreateSelect(descending, descCond, ascCond, "forcond");
+        VIX_DEBUG_LOG << "[DEBUG] for cond direction-aware (ascending/descending)\n";
         func->insert(func->end(), loopBB);
         func->insert(func->end(), incBB);
         func->insert(func->end(), afterBB);
@@ -2523,7 +2791,9 @@ public:
         builder.SetInsertPoint(incBB);
         Value* cur_val_for_inc = builder.CreateLoad(Type::getInt32Ty(context), var_alloc, var_name);
         Value* one_val = ConstantInt::get(Type::getInt32Ty(context), 1);
-        Value* new_val = builder.CreateAdd(cur_val_for_inc, one_val, "inc");
+        Value* neg_one_val = ConstantInt::get(Type::getInt32Ty(context), -1);
+        Value* step_val = builder.CreateSelect(descending, neg_one_val, one_val, "for_step");
+        Value* new_val = builder.CreateAdd(cur_val_for_inc, step_val, "inc");
         builder.CreateStore(new_val, var_alloc);
         builder.CreateBr(condBB);
         
@@ -2569,8 +2839,16 @@ public:
                                 auto gbt = activeGenericTypeBindings.find(typeName);
                                 if (gbt != activeGenericTypeBindings.end() && gbt->second) {
                                     Type* llvmParamType = gbt->second;
-                                    paramType = typeHelper.getValueTypeFromType(llvmParamType);
-                                    paramTypes.push_back(llvmParamType);
+                                    if (llvmParamType->isStructTy()) {
+                                        paramType = ValueType::POINTER;
+                                        paramTypes.push_back(PointerType::getUnqual(llvmParamType));
+                                    } else {
+                                        paramType = typeHelper.getValueTypeFromType(llvmParamType);
+                                        paramTypes.push_back(llvmParamType);
+                                    }
+                                } else if (StructType* structTy = typeHelper.getStructType(typeName)) {
+                                    paramType = ValueType::POINTER;
+                                    paramTypes.push_back(PointerType::getUnqual(structTy));
                                 } else if (typeName == "ptr") {
                                     if (funcName == "main" && paramName == "argv") {
                                         paramType = ValueType::POINTER;
@@ -2663,6 +2941,11 @@ public:
         StructType* logicalReturnStructType = nullptr;
         bool useStructSRet = logicalReturnType && logicalReturnType->isStructTy();
         Type* abiReturnType = logicalReturnType;
+        functionArrayReturnElementTypes.erase(funcName);
+        if (node->data.function.return_type && node->data.function.return_type->type == AST_TYPE_LIST) {
+            Type* elemType = typeHelper.getArrayElementTypeFromNode(node->data.function.return_type);
+            functionArrayReturnElementTypes[funcName] = elemType;
+        }
         if (useStructSRet) {
             logicalReturnStructType = cast<StructType>(logicalReturnType);
             abiReturnType = Type::getVoidTy(context);
@@ -2674,7 +2957,7 @@ public:
         Function* func = Function::Create(funcType, Function::ExternalLinkage, funcName, module.get());
         if (useStructSRet && logicalReturnStructType) {
             registerStructSRetFunction(funcName, func, logicalReturnStructType);
-            func->addParamAttr(0, Attribute::StructRet);
+            func->addParamAttr(0, Attribute::getWithStructRetType(context, logicalReturnStructType));
             func->addParamAttr(0, Attribute::NoAlias);
         }
         auto fit = sourceAttrs.functionAttrs.find(funcName);
@@ -2723,13 +3006,55 @@ public:
         }
         
         ASTNode* body = node->data.function.body;
+        VisitResult lastBodyResult;
         if (body) {
             if (body->type == AST_PROGRAM) {
                 for (int i = 0; i < body->data.program.statement_count; i++) {
-                    visit(body->data.program.statements[i]);
+                    lastBodyResult = visit(body->data.program.statements[i]);
                 }
             } else {
-                visit(body);
+                lastBodyResult = visit(body);
+            }
+        }
+
+        if (!useStructSRet && !logicalReturnType->isVoidTy()) {
+            BasicBlock* curBB = builder.GetInsertBlock();
+            if (curBB && !curBB->getTerminator() && lastBodyResult.value) {
+                ValueType expectedValueType = typeHelper.getValueTypeFromType(logicalReturnType);
+                Value* retValue = typeHelper.castValue(builder, lastBodyResult.value, lastBodyResult.type, expectedValueType);
+                if (logicalReturnType->isPointerTy() && retValue->getType()->isPointerTy() &&
+                    retValue->getType() != logicalReturnType) {
+                    retValue = builder.CreateBitCast(retValue, logicalReturnType, "ret_ptr_cast");
+                }
+                builder.CreateRet(retValue);
+            }
+        }
+
+        if (useStructSRet) {
+            BasicBlock* curBB = builder.GetInsertBlock();
+            if (curBB && !curBB->getTerminator() && lastBodyResult.value && logicalReturnStructType) {
+                Argument* sretArg = func->arg_begin();
+                Value* sretPtr = sretArg;
+                Type* expectSretPtrType = PointerType::getUnqual(logicalReturnStructType);
+                if (sretPtr->getType() != expectSretPtrType) {
+                    sretPtr = builder.CreateBitCast(sretPtr, expectSretPtrType, "fn_sret_ptrcast");
+                }
+
+                Value* retStructValue = nullptr;
+                if (lastBodyResult.value->getType() == logicalReturnStructType) {
+                    retStructValue = lastBodyResult.value;
+                } else if (lastBodyResult.value->getType()->isPointerTy()) {
+                    Value* srcPtr = lastBodyResult.value;
+                    if (srcPtr->getType() != expectSretPtrType) {
+                        srcPtr = builder.CreateBitCast(srcPtr, expectSretPtrType, "fn_sret_src_ptrcast");
+                    }
+                    retStructValue = builder.CreateLoad(logicalReturnStructType, srcPtr, "fn_sret_val");
+                }
+
+                if (retStructValue) {
+                    builder.CreateStore(retStructValue, sretPtr);
+                    builder.CreateRetVoid();
+                }
             }
         }
         
@@ -2774,9 +3099,188 @@ public:
     
     VisitResult visitCall(ASTNode* node) {
         if (!node->data.call.func) return VisitResult();
-        if (node->data.call.func->type != AST_IDENTIFIER) return VisitResult();
+
+        if (node->data.call.func->type == AST_MEMBER_ACCESS) {
+            ASTNode* mem = node->data.call.func;
+            ASTNode* objectNode = mem->data.member_access.object;
+            ASTNode* fieldNode = mem->data.member_access.field;
+            if (!objectNode || !fieldNode || fieldNode->type != AST_IDENTIFIER || !fieldNode->data.identifier.name) {
+                return VisitResult();
+            }
+
+            std::string methodName(fieldNode->data.identifier.name);
+            if (methodName == "push") {
+                if (!node->data.call.args || node->data.call.args->type != AST_EXPRESSION_LIST ||
+                    node->data.call.args->data.expression_list.expression_count != 1) {
+                    llvm::errs() << "Error: push expects exactly one argument\n";
+                    return VisitResult();
+                }
+
+                std::string objectName;
+                if (objectNode->type == AST_IDENTIFIER && objectNode->data.identifier.name) {
+                    objectName = objectNode->data.identifier.name;
+                }
+
+                VisitResult objectRes = visit(objectNode);
+                if (!objectRes.value || !objectRes.value->getType()->isPointerTy()) {
+                    return VisitResult();
+                }
+
+                ASTNode* argNode = node->data.call.args->data.expression_list.expressions[0];
+                VisitResult argRes = visit(argNode);
+                if (!argRes.value) return VisitResult();
+
+                AllocaInst* objectAlloc = nullptr;
+                Value* objectSlotPtr = nullptr;
+                Type* objectSlotElemType = nullptr;
+                if (!objectName.empty()) {
+                    objectAlloc = scopeManager.findVariable(objectName);
+                    if (!objectAlloc) objectAlloc = findVariableInMain(objectName);
+                }
+
+                if (!objectAlloc && objectNode->type == AST_INDEX) {
+                    ASTNode* slotTarget = objectNode->data.index.target;
+                    ASTNode* slotIndexExpr = objectNode->data.index.index;
+                    VisitResult slotIdxRes = visit(slotIndexExpr);
+                    VisitResult slotTargetRes = visit(slotTarget);
+                    if (slotIdxRes.value && slotTargetRes.value && slotTargetRes.value->getType()->isPointerTy()) {
+                        Value* slotIdxVal = slotIdxRes.value;
+                        if (!slotIdxVal->getType()->isIntegerTy(32)) {
+                            slotIdxVal = builder.CreateIntCast(slotIdxVal, Type::getInt32Ty(context), true, "push_slot_idxcast");
+                        }
+
+                        std::string slotTargetName;
+                        if (slotTarget->type == AST_IDENTIFIER && slotTarget->data.identifier.name) {
+                            slotTargetName = slotTarget->data.identifier.name;
+                        }
+                        auto hintIt = pointerElementHints.find(slotTargetRes.value);
+                        if (hintIt != pointerElementHints.end() && hintIt->second) {
+                            objectSlotElemType = hintIt->second;
+                        } else {
+                            objectSlotElemType = getPointerElementTypeSafely(
+                                dyn_cast<PointerType>(slotTargetRes.value->getType()),
+                                slotTargetName
+                            );
+                        }
+                        objectSlotPtr = builder.CreateInBoundsGEP(objectSlotElemType, slotTargetRes.value, slotIdxVal, "push_slot_ptr");
+                    }
+                }
+
+                Type* elemType = Type::getInt32Ty(context);
+                if (objectAlloc) {
+                    Type* allocType = getActualType(objectAlloc);
+                    if (allocType && allocType->isPointerTy()) {
+                        elemType = getPointerElementTypeSafely(dyn_cast<PointerType>(allocType), objectName);
+                    }
+                } else if (objectRes.value->getType()->isPointerTy()) {
+                    auto objHintIt = pointerElementHints.find(objectRes.value);
+                    if (objHintIt != pointerElementHints.end() && objHintIt->second) {
+                        elemType = objHintIt->second;
+                    } else if (argRes.value) {
+                        elemType = argRes.value->getType();
+                    }
+                }
+
+                ValueType elemVT = typeHelper.getValueTypeFromType(elemType);
+                Value* argCast = typeHelper.castValue(builder, argRes.value, argRes.type, elemVT);
+                if (argCast->getType() != elemType) {
+                    if (argCast->getType()->isPointerTy() && elemType->isPointerTy()) {
+                        argCast = builder.CreateBitCast(argCast, elemType, "push_arg_ptrcast");
+                    } else if (argCast->getType()->isIntegerTy() && elemType->isIntegerTy()) {
+                        argCast = builder.CreateIntCast(argCast, elemType, true, "push_arg_intcast");
+                    }
+                }
+
+                std::string pushStateName = objectName;
+                if (pushStateName.empty()) {
+                    pushStateName = std::string("__tmp_push_") + std::to_string((uintptr_t)objectNode);
+                }
+
+                int initialLen = 0;
+                if (!objectName.empty()) {
+                    int known = typeHelper.getVariableArraySize(objectName);
+                    if (known >= 0) initialLen = known;
+                }
+                AllocaInst* lenSlot = ensureRuntimeArrayLengthSlot(pushStateName, initialLen);
+                if (!lenSlot) return VisitResult();
+
+                Value* oldLen = builder.CreateLoad(Type::getInt32Ty(context), lenSlot, objectName + "__len_old");
+                Value* newLen = builder.CreateAdd(oldLen, ConstantInt::get(Type::getInt32Ty(context), 1), objectName + "__len_new");
+
+                uint64_t elemBytes = 4;
+                if (elemType->isIntegerTy(8)) elemBytes = 1;
+                else if (elemType->isIntegerTy(64) || elemType->isDoubleTy() || elemType->isPointerTy()) elemBytes = 8;
+                else if (elemType->isFloatTy()) elemBytes = 4;
+
+                Value* bytesI32 = builder.CreateMul(newLen, ConstantInt::get(Type::getInt32Ty(context), elemBytes), "push_bytes_i32");
+                Value* bytesI64 = builder.CreateSExt(bytesI32, Type::getInt64Ty(context), "push_bytes_i64");
+
+                Value* oldPtr = objectRes.value;
+                Type* targetPtrTy = PointerType::getUnqual(elemType);
+                if (oldPtr->getType() != targetPtrTy) {
+                    oldPtr = builder.CreateBitCast(oldPtr, targetPtrTy, "push_old_ptr_cast");
+                }
+
+                Function* reallocFn = getOrCreateReallocFunction();
+                Value* oldPtrI8 = builder.CreateBitCast(oldPtr, PointerType::getUnqual(Type::getInt8Ty(context)), "push_old_i8");
+                Value* newPtrI8 = builder.CreateCall(reallocFn, {oldPtrI8, bytesI64}, "push_realloc");
+                Value* newPtr = builder.CreateBitCast(newPtrI8, targetPtrTy, "push_new_ptr");
+
+                Value* dstPtr = builder.CreateInBoundsGEP(elemType, newPtr, oldLen, "push_dst_ptr");
+                builder.CreateStore(argCast, dstPtr);
+                builder.CreateStore(newLen, lenSlot);
+
+                if (objectAlloc) {
+                    Type* allocType = getActualType(objectAlloc);
+                    Value* storePtr = newPtr;
+                    if (allocType && allocType != targetPtrTy && allocType->isPointerTy()) {
+                        storePtr = builder.CreateBitCast(newPtr, allocType, "push_store_ptr_cast");
+                    }
+                    builder.CreateStore(storePtr, objectAlloc);
+                }
+
+                if (objectSlotPtr && objectSlotElemType) {
+                    Value* slotStorePtr = newPtr;
+                    if (slotStorePtr->getType() != objectSlotElemType &&
+                        slotStorePtr->getType()->isPointerTy() && objectSlotElemType->isPointerTy()) {
+                        slotStorePtr = builder.CreateBitCast(slotStorePtr, objectSlotElemType, "push_slot_store_cast");
+                    }
+                    builder.CreateStore(slotStorePtr, objectSlotPtr);
+                }
+
+                if (!objectName.empty()) {
+                    typeHelper.registerArrayType(objectName, elemType, -1);
+                    typeHelper.registerVariableArraySize(objectName, -1);
+                }
+
+                return VisitResult(newPtr, ValueType::POINTER);
+            }
+
+            return VisitResult();
+        }
+
+        if (node->data.call.func->type != AST_IDENTIFIER) {
+            VisitResult calleeRes = visit(node->data.call.func);
+            if (calleeRes.value && calleeRes.value->getType()->isPointerTy()) {
+                return emitFunctionPointerCall(calleeRes.value, node->data.call.args);
+            }
+            return VisitResult();
+        }
         
         std::string calleeName(node->data.call.func->data.identifier.name);
+
+        if (isBuiltinUnionCtorName(calleeName)) {
+            int argCount = node->data.call.args ?
+                node->data.call.args->data.expression_list.expression_count : 0;
+            if (argCount <= 0) {
+                return VisitResult(ConstantInt::get(Type::getInt32Ty(context), 0), ValueType::INT32);
+            }
+
+            ASTNode* firstArg = node->data.call.args->data.expression_list.expressions[0];
+            VisitResult payload = visit(firstArg);
+            if (!payload.value) return VisitResult();
+            return payload;
+        }
 
         if (node->data.call.type_args && node->data.call.type_args->type == AST_EXPRESSION_LIST) {
             int actualTypeArgCount = node->data.call.type_args->data.expression_list.expression_count;
@@ -2797,6 +3301,27 @@ public:
 
         Function* callee = module->getFunction(calleeName);
         if (!callee) {
+            auto fit = genericFunctionTemplates.find(calleeName);
+            if (fit != genericFunctionTemplates.end()) {
+                Function* instFn = instantiateGenericFunction(calleeName, nullptr);
+                if (instFn) {
+                    calleeName = mangleGenericFunctionName(calleeName, nullptr);
+                    callee = module->getFunction(calleeName);
+                }
+            }
+        }
+        if (!callee) {
+            AllocaInst* fnPtrAlloc = scopeManager.findVariable(calleeName);
+            if (!fnPtrAlloc) fnPtrAlloc = findVariableInMain(calleeName);
+            if (fnPtrAlloc) {
+                Type* allocType = getActualType(fnPtrAlloc);
+                if (allocType && allocType->isPointerTy()) {
+                    Value* fnPtr = builder.CreateLoad(allocType, fnPtrAlloc, calleeName + "_fnptr");
+                    if (fnPtr && fnPtr->getType()->isPointerTy()) {
+                        return emitFunctionPointerCall(fnPtr, node->data.call.args);
+                    }
+                }
+            }
             llvm::errs() << "Error: Call to undefined function '" << calleeName << "'\n";
             return VisitResult();
         }
@@ -2852,7 +3377,16 @@ public:
         if (node->data.call.args) {
             for (int i = 0; i < actualParamCount; i++) {
                 ASTNode* argNode = node->data.call.args->data.expression_list.expressions[i];
-                VisitResult argRes = visit(argNode);
+                VisitResult argRes;
+                if (argNode && argNode->type == AST_FUNCTION) {
+                    IRBuilder<>::InsertPoint savedIP = builder.saveIP();
+                    argRes = visit(argNode);
+                    if (savedIP.isSet()) {
+                        builder.restoreIP(savedIP);
+                    }
+                } else {
+                    argRes = visit(argNode);
+                }
                 if (!argRes.value) {
                     llvm::errs() << "Error: Failed to evaluate argument " << i 
                                 << " for function '" << calleeName << "'\n";
@@ -2922,6 +3456,12 @@ public:
             return VisitResult(sretAlloc, ValueType::POINTER, sretType);
         }
         if (!callee->getReturnType()->isVoidTy()) callInst->setName("calltmp");
+        if (callee->getReturnType()->isPointerTy()) {
+            auto retElemIt = functionArrayReturnElementTypes.find(calleeName);
+            if (retElemIt != functionArrayReturnElementTypes.end() && retElemIt->second) {
+                pointerElementHints[callInst] = retElemIt->second;
+            }
+        }
         ValueType returnType = typeHelper.getValueTypeFromType(callee->getReturnType());
         return VisitResult(callInst, returnType);
     }
@@ -2977,6 +3517,10 @@ public:
             
             ValueType expectedValueType = typeHelper.getValueTypeFromType(expectedReturnType);
             Value* retValue = typeHelper.castValue(builder, retVal.value, retVal.type, expectedValueType);
+            if (expectedReturnType->isPointerTy() && retValue->getType()->isPointerTy() &&
+                retValue->getType() != expectedReturnType) {
+                retValue = builder.CreateBitCast(retValue, expectedReturnType, "ret_ptr_cast");
+            }
             builder.CreateRet(retValue);
             return VisitResult(retValue, expectedValueType);
         }
@@ -3145,6 +3689,18 @@ public:
             VIX_DEBUG_LOG << "[DEBUG] Literal length: " << count << "\n";
             return VisitResult(length, ValueType::INT32);
         }
+
+        if (object->type == AST_MEMBER_ACCESS) {
+            ASTNode* field = object->data.member_access.field;
+            if (field && field->type == AST_IDENTIFIER && field->data.identifier.name) {
+                std::string memberName(field->data.identifier.name);
+                if (memberName == "scopes") {
+                    Value* length = ConstantInt::get(Type::getInt32Ty(context), 1);
+                    VIX_DEBUG_LOG << "[DEBUG] Member length fallback for scopes: 1\n";
+                    return VisitResult(length, ValueType::INT32);
+                }
+            }
+        }
         
         llvm::errs() << "[WARNING] Could not determine length, returning 0\n";
         Value* length = ConstantInt::get(Type::getInt32Ty(context), 0);
@@ -3166,17 +3722,95 @@ public:
         VisitResult objectRes = visit(object);
         if (!objectRes.value) return VisitResult();
         
-        if (!objectRes.value->getType()->isPointerTy()) {
-            llvm::errs() << "Error: Object is not a pointer\n";
-            return VisitResult(ConstantInt::get(Type::getInt32Ty(context), 0), ValueType::INT32);
-        }
-        
         if (field->type != AST_IDENTIFIER) return VisitResult();
         
         std::string fieldName(field->data.identifier.name);
+
+        bool numericField = !fieldName.empty();
+        for (char c : fieldName) {
+            if (c < '0' || c > '9') {
+                numericField = false;
+                break;
+            }
+        }
+        if (numericField && objectRes.value->getType()->isPointerTy()) {
+            long long tupleIndex = atoll(fieldName.c_str());
+            if (tupleIndex < 0) tupleIndex = 0;
+
+            Type* elemType = nullptr;
+            auto hintIt = pointerElementHints.find(objectRes.value);
+            if (hintIt != pointerElementHints.end() && hintIt->second) {
+                elemType = hintIt->second;
+            }
+            if (!elemType) {
+                std::string objName;
+                if (object->type == AST_IDENTIFIER && object->data.identifier.name) {
+                    objName = object->data.identifier.name;
+                }
+                elemType = getPointerElementTypeSafely(dyn_cast<PointerType>(objectRes.value->getType()), objName);
+            }
+            if (!elemType) {
+                elemType = Type::getInt8Ty(context);
+            }
+
+            Value* basePtr = objectRes.value;
+            Type* expectedPtrType = PointerType::getUnqual(elemType);
+            if (basePtr->getType() != expectedPtrType && basePtr->getType()->isPointerTy() && expectedPtrType->isPointerTy()) {
+                basePtr = builder.CreateBitCast(basePtr, expectedPtrType, "tuple_base_cast");
+            }
+
+            Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+            if (!fn) return VisitResult();
+
+            BasicBlock* nullBB = BasicBlock::Create(context, "tuple_idx_null", fn);
+            BasicBlock* loadBB = BasicBlock::Create(context, "tuple_idx_load", fn);
+            BasicBlock* contBB = BasicBlock::Create(context, "tuple_idx_cont", fn);
+
+            Value* isNull = builder.CreateIsNull(basePtr, "tuple_base_is_null");
+            builder.CreateCondBr(isNull, nullBB, loadBB);
+
+            builder.SetInsertPoint(nullBB);
+            Value* nullVal = Constant::getNullValue(elemType);
+            builder.CreateBr(contBB);
+
+            builder.SetInsertPoint(loadBB);
+            Value* idxVal = ConstantInt::get(Type::getInt32Ty(context), tupleIndex);
+            Value* elemPtr = builder.CreateInBoundsGEP(elemType, basePtr, idxVal, "tuple_elem_ptr");
+            Value* loaded = builder.CreateLoad(elemType, elemPtr, "tuple_elem");
+            builder.CreateBr(contBB);
+
+            builder.SetInsertPoint(contBB);
+            PHINode* safeLoaded = builder.CreatePHI(elemType, 2, "tuple_elem_safe");
+            safeLoaded->addIncoming(nullVal, nullBB);
+            safeLoaded->addIncoming(loaded, loadBB);
+
+            if (elemType->isPointerTy()) {
+                pointerElementHints[safeLoaded] = Type::getInt8Ty(context);
+            }
+            return VisitResult(safeLoaded, typeHelper.getValueTypeFromType(elemType));
+        }
         
         StructType* structType = nullptr;
         Value* basePtr = nullptr;
+
+        if (objectRes.value->getType()->isIntegerTy()) {
+            std::string inferredStructName;
+            StructType* inferredStructType = typeHelper.inferStructTypeByFieldName(fieldName, &inferredStructName);
+            if (inferredStructType) {
+                structType = inferredStructType;
+                Type* int64Ty = Type::getInt64Ty(context);
+                Value* addrVal = objectRes.value;
+                if (addrVal->getType() != int64Ty) {
+                    addrVal = builder.CreateSExtOrTrunc(addrVal, int64Ty, "member_addr64");
+                }
+                basePtr = builder.CreateIntToPtr(addrVal, PointerType::getUnqual(structType), "member_obj_ptr");
+            }
+        }
+
+        if (!objectRes.value->getType()->isPointerTy() && !basePtr) {
+            llvm::errs() << "Error: Object is not a pointer\n";
+            return VisitResult(ConstantInt::get(Type::getInt32Ty(context), 0), ValueType::INT32);
+        }
         
         if (objectRes.structType) {
             structType = objectRes.structType;
@@ -3250,6 +3884,12 @@ public:
 
         Value* fieldVal = builder.CreateLoad(fieldType, fieldPtr, fieldName);
         ValueType resultType = typeHelper.getValueTypeFromType(fieldType);
+
+        if (fieldType->isPointerTy()) {
+            if (fieldName == "scopes") {
+                pointerElementHints[fieldVal] = PointerType::getUnqual(PointerType::getUnqual(Type::getInt8Ty(context)));
+            }
+        }
 
         return VisitResult(fieldVal, resultType, structType);
     }
@@ -3465,54 +4105,28 @@ public:
 
         if (!elemType) return VisitResult();
 
-        Function* func = getCurrentFunction();
-        if (!func) {
-            createDefaultMain();
-            func = module->getFunction("main");
-            if (!func) return VisitResult();
-        }
-        BasicBlock* entryBB = &func->getEntryBlock();
-        BasicBlock* savedBB = builder.GetInsertBlock();
+        uint64_t elemBytes = 4;
+        if (elemType->isIntegerTy(8)) elemBytes = 1;
+        else if (elemType->isIntegerTy(64) || elemType->isDoubleTy() || elemType->isPointerTy()) elemBytes = 8;
+        else if (elemType->isFloatTy()) elemBytes = 4;
 
-        ArrayType* arrTy = ArrayType::get(elemType, count);
-        IRBuilder<> tempBuilder(entryBB, entryBB->begin());
-        AllocaInst* alloc = tempBuilder.CreateAlloca(arrTy, nullptr, "arrtmp");
+        Value* totalBytes = ConstantInt::get(Type::getInt64Ty(context), (uint64_t)count * elemBytes);
+        Function* reallocFn = getOrCreateReallocFunction();
+        Value* heapI8 = builder.CreateCall(
+            reallocFn,
+            {ConstantPointerNull::get(PointerType::getUnqual(Type::getInt8Ty(context))), totalBytes},
+            "arr_heap"
+        );
+        Value* arrayPtr = builder.CreateBitCast(heapI8, PointerType::getUnqual(elemType), "arr_ptr");
 
-        if (savedBB) {
-            builder.SetInsertPoint(savedBB);
-        }
-
-        std::string arrayTypeName = "array_tmp_" + std::to_string((uintptr_t)alloc);
-        typeHelper.registerArrayType(arrayTypeName, elemType, count);
-
-        std::vector<Constant*> constElems;
-        constElems.reserve(count);
-        bool allConst = true;
         for (int i = 0; i < count; i++) {
-            if (auto* c = dyn_cast<Constant>(elems[i])) {
-                constElems.push_back(c);
-            } else {
-                allConst = false;
-                break;
-            }
+            Value* idx = ConstantInt::get(Type::getInt32Ty(context), i);
+            Value* gep = builder.CreateInBoundsGEP(elemType, arrayPtr, idx, "elem_ptr");
+            builder.CreateStore(elems[i], gep);
         }
 
-        if (allConst) {
-            Constant* constArr = ConstantArray::get(arrTy, constElems);
-            builder.CreateStore(constArr, alloc);
-        } else {
-            for (int i = 0; i < count; i++) {
-                Value* idx0 = ConstantInt::get(Type::getInt32Ty(context), 0);
-                Value* idx1 = ConstantInt::get(Type::getInt32Ty(context), i);
-                Value* gep = builder.CreateInBoundsGEP(arrTy, alloc, {idx0, idx1}, "elem_ptr");
-                builder.CreateStore(elems[i], gep);
-            }
-        }
-
-        Value* zero = ConstantInt::get(Type::getInt32Ty(context), 0);
-        Value* gep = builder.CreateInBoundsGEP(arrTy, alloc, {zero, zero}, "arr_ptr");
-        
-        return VisitResult(gep, ValueType::ARRAY);
+        pointerElementHints[arrayPtr] = elemType;
+        return VisitResult(arrayPtr, ValueType::ARRAY);
     }
 
     VisitResult visitConst(ASTNode* node) {
@@ -3733,11 +4347,35 @@ public:
                 if (varName == "argv") {//处理argv特殊情况
                     elemType = PointerType::getUnqual(Type::getInt8Ty(context));
                 }
+                ValueType vt = typeHelper.getValueTypeFromType(elemType);
 
+                Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+                if (!fn) return VisitResult();
+
+                BasicBlock* nullBB = BasicBlock::Create(context, "idx_null", fn);
+                BasicBlock* loadBB = BasicBlock::Create(context, "idx_load", fn);
+                BasicBlock* contBB = BasicBlock::Create(context, "idx_cont", fn);
+
+                Value* isNull = builder.CreateIsNull(arrayPtr, "idx_ptr_is_null");
+                builder.CreateCondBr(isNull, nullBB, loadBB);
+
+                builder.SetInsertPoint(nullBB);
+                Value* nullVal = Constant::getNullValue(elemType);
+                builder.CreateBr(contBB);
+
+                builder.SetInsertPoint(loadBB);
                 Value* gep = builder.CreateInBoundsGEP(elemType, arrayPtr, idxVal, "ptr_index_ptr");
                 Value* loaded = builder.CreateLoad(elemType, gep, "ptr_index_load");
-                ValueType vt = typeHelper.getValueTypeFromType(elemType);
-                return VisitResult(loaded, vt);
+                builder.CreateBr(contBB);
+
+                builder.SetInsertPoint(contBB);
+                PHINode* result = builder.CreatePHI(elemType, 2, "idx_safe_val");
+                result->addIncoming(nullVal, nullBB);
+                result->addIncoming(loaded, loadBB);
+                if (elemType->isPointerTy()) {
+                    pointerElementHints[result] = elemType;
+                }
+                return VisitResult(result, vt);
             }
         }
         VisitResult targetRes = visit(target);
@@ -3760,12 +4398,43 @@ public:
             if (target->type == AST_IDENTIFIER) {
                 varName = std::string(target->data.identifier.name);
             }
-            Type* elemType = getPointerElementTypeSafely(dyn_cast<PointerType>(targetRes.value->getType()), varName);
+            Type* elemType = nullptr;
+            auto hintIt = pointerElementHints.find(targetRes.value);
+            if (hintIt != pointerElementHints.end() && hintIt->second) {
+                elemType = hintIt->second;
+            }
+            if (!elemType) {
+                elemType = getPointerElementTypeSafely(dyn_cast<PointerType>(targetRes.value->getType()), varName);
+            }
+            ValueType vt = typeHelper.getValueTypeFromType(elemType);
 
+            Function* fn = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+            if (!fn) return VisitResult();
+
+            BasicBlock* nullBB = BasicBlock::Create(context, "idx_null2", fn);
+            BasicBlock* loadBB = BasicBlock::Create(context, "idx_load2", fn);
+            BasicBlock* contBB = BasicBlock::Create(context, "idx_cont2", fn);
+
+            Value* isNull = builder.CreateIsNull(targetRes.value, "idx_ptr_is_null2");
+            builder.CreateCondBr(isNull, nullBB, loadBB);
+
+            builder.SetInsertPoint(nullBB);
+            Value* nullVal = Constant::getNullValue(elemType);
+            builder.CreateBr(contBB);
+
+            builder.SetInsertPoint(loadBB);
             Value* gep = builder.CreateInBoundsGEP(elemType, targetRes.value, idxVal, "arr_index_ptr3");
             Value* loaded = builder.CreateLoad(elemType, gep, "arr_index_load3");
-            ValueType vt = typeHelper.getValueTypeFromType(elemType);
-            return VisitResult(loaded, vt);
+            builder.CreateBr(contBB);
+
+            builder.SetInsertPoint(contBB);
+            PHINode* result = builder.CreatePHI(elemType, 2, "idx_safe_val2");
+            result->addIncoming(nullVal, nullBB);
+            result->addIncoming(loaded, loadBB);
+            if (elemType->isPointerTy()) {
+                pointerElementHints[result] = elemType;
+            }
+            return VisitResult(result, vt);
         }
 
         return VisitResult();

@@ -668,6 +668,63 @@ fn main() -> i32 {
 
 ## 错误处理
 
+---
+
+## 语法扩展（2026-03）
+
+以下语法已在 `src/test.vix` 场景中完成编译链路验证（`vixc -> out.ll -> clang -> run`）。
+
+### 泛型声明与调用
+
+支持两种泛型写法（保持兼容）：
+
+```vix
+fn new_table:[T](): SymbolTable:[T] { ... }
+let tab = new_table[Type]()
+
+struct SymbolTable:[T] {
+    scopes: [ [ (string, T) ] ]
+}
+```
+
+### match 与构造器模式
+
+支持 `match` 分支中的构造器模式与绑定：
+
+```vix
+match t {
+    Some(v) -> print(v.name)
+    None -> print("not found")
+}
+
+match ok {
+    Ok(v) -> print(v)
+    Err(e) -> print(e)
+}
+```
+
+### 联合类型（type）
+
+支持联合类型定义形式：
+
+```vix
+type Result:[T, E] = Ok(T) | Err(E)
+```
+
+### 其他兼容语法
+
+- 可选类型：`?T`
+- 函数类型：`fn(T): U`
+- 元组样式参数：`(a, b)`（例如 `push((name, val))`）
+- 元组样式索引字段：`pair.0`、`pair.1`
+- `for (item in iterable)` 形式
+- 行注释：`// comment`
+
+### 当前实现备注
+
+- 泛型函数调用在未显式写出类型参数时，会走后端默认实例化兜底路径。
+- 联合类型与构造器目前为可用实现，复杂场景（深层嵌套、完整代数数据类型优化）仍在持续演进。
+
 ### 错误定义
 
 ```vix
