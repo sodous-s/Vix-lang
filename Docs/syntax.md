@@ -28,7 +28,7 @@
 每个 Vix 程序都从 `main` 函数开始执行：
 
 ```vix
-fn main() -> i32 {
+fn main(): i32 {
     // 程序代码
     return 0
 }
@@ -37,7 +37,7 @@ fn main() -> i32 {
 带命令行参数的入口函数：
 
 ```vix
-fn main(argc: i32, argv: ptr) -> i32 {
+fn main(argc: i32, argv: ptr): i32 {
     for (i in 0 .. argc) {
         print(argv[i])
     }
@@ -74,7 +74,7 @@ extern "C" {
 }
 
 // 函数定义
-fn main() -> i32 {
+fn main(): i32 {
     print("Hello, Vix!")
     return 0
 }
@@ -170,9 +170,9 @@ my-var      // 不能包含连字符
 
 ### 变量声明
 
-#### 不可变变量
+#### 变量
 
-使用 `let` 关键字声明不可变变量：
+使用 `let` 关键字声明变量：
 
 ```vix
 let x = 10
@@ -180,14 +180,6 @@ let name = "Vix"
 let pi = 3.14159
 ```
 
-#### 可变变量
-
-使用 `mut` 关键字声明可变变量：
-
-```vix
-mut counter = 0
-counter = counter + 1  // 可以修改
-```
 
 ### 类型标注
 
@@ -233,34 +225,12 @@ x /= 4
 ### 类型标注语法
 
 ```vix
-// 基本类型
 let num: i32 = 42
 let float: f64 = 3.14
 let text: string = "Hello"
 let flag: bool = true
-
-// 指针类型
-let ptr: &i32 = &num
-
-// 数组类型
-let arr: [i32 * 5] = [1, 2, 3, 4, 5]
-
-// 列表类型
-let list: [i32] = [1, 2, 3]
-```
-
-### 类型转换
-
-#### 字符串转整数
-
-```vix
-let num = toint("123")  // 返回 123
-```
-
-#### 字符串转浮点数
-
-```vix
-let float = tofloat("3.14")  // 返回 3.14
+let ptr: &i32 = &num// 指针类型
+let arr: [i32 * 5] = [1, 2, 3, 4, 5]// 数组
 ```
 
 ---
@@ -431,7 +401,7 @@ match value {
 ### 函数定义
 
 ```vix
-fn function_name(param1: type1, param2: type2) -> return_type {
+fn function_name(param1: type1, param2: type2): return_type {
     // 函数体
     return value
 }
@@ -440,7 +410,7 @@ fn function_name(param1: type1, param2: type2) -> return_type {
 ### 基本示例
 
 ```vix
-fn add(a: i32, b: i32) -> i32 {
+fn add(a: i32, b: i32): i32 {
     return a + b
 }
 
@@ -454,7 +424,7 @@ fn greet(name: string) {
 使用 `pub` 关键字声明可导出的函数：
 
 ```vix
-pub fn publicFunction(x: i32) -> i32 {
+pub fn publicFunction(x: i32): i32 {
     return x * 2
 }
 ```
@@ -463,9 +433,9 @@ pub fn publicFunction(x: i32) -> i32 {
 
 ```vix
 extern "C" {
-    fn printf(format: ptr, ...) -> i32
-    fn malloc(size: i32) -> ptr
-    fn free(ptr: ptr) -> void
+    fn printf(format: ptr, ...): i32
+    fn malloc(size: i32): ptr
+    fn free(ptr: ptr): void
 }
 ```
 
@@ -559,26 +529,26 @@ print(arr.length)  // 5
 ### 动态列表
 
 ```vix
-// 声明
-let list = [1, 2, 3]
+fn map:[T, U](list: [T], f: fn(T): U): [U]
+{
+    let out = []
+    for (item in list)
+    {
+        out.push(f(item))
+    }
+    return out
+}
 
-// 添加元素到末尾
-list.push!(4)      // [1, 2, 3, 4]
+fn main(): i32
+{
+    let nums = [1, 2, 3]
+    let doubled = map:[i32, i32](nums, fn(x: i32): i32 { x * 2 })
+    print(doubled[0])
+    print(doubled[1])
+    print(doubled[2])
+    return 0
+}
 
-// 在指定位置插入
-list.add!(0, 0)    // [0, 1, 2, 3, 4]
-
-// 移除并返回指定位置的元素
-let elem = list.remove(0)  // elem = 0, list = [1, 2, 3, 4]
-
-// 弹出最后一个元素
-let last = list.pop()      // last = 4, list = [1, 2, 3]
-
-// 替换指定位置的元素
-list.replace!(1, 10)       // [1, 10, 3]
-
-// 列表长度
-print(list.length)
 ```
 
 ### 数组作为函数参数
@@ -599,7 +569,7 @@ fn printArray(arr: [i32], len: i32) {
 
 ```vix
 let x = 10
-mut ptr = &x        // 获取 x 的地址
+let mut ptr = &x        // 获取 x 的地址
 
 let value = @ptr    // 解引用：获取 ptr 指向的值
 @ptr = 20           // 通过指针修改值
@@ -643,7 +613,7 @@ import "std/strings.vix"
 
 ```vix
 // mymodule.vix
-pub fn myPublicFunction(x: i32) -> i32 {
+pub fn myPublicFunction(x: i32): i32 {
     return x * 2
 }
 
@@ -657,7 +627,7 @@ fn privateHelper() {
 ```vix
 import "mymodule.vix"
 
-fn main() -> i32 {
+fn main(): i32 {
     let result = myPublicFunction(5)
     print(result)
     return 0
@@ -703,7 +673,7 @@ match ok {
 }
 ```
 
-### 联合类型（type）
+### 联合类型（ADT）
 
 支持联合类型定义形式：
 
@@ -725,24 +695,6 @@ type Result:[T, E] = Ok(T) | Err(E)
 - 泛型函数调用在未显式写出类型参数时，会走后端默认实例化兜底路径。
 - 联合类型与构造器目前为可用实现，复杂场景（深层嵌套、完整代数数据类型优化）仍在持续演进。
 
-### 错误定义
-
-```vix
-maybe {
-    error."NotFound" {
-        code: 404,
-        message: "The requested resource was not found."
-    }
-}
-```
-
-### 错误捕获
-
-```vix
-catch error."NotFound" as e {
-    print("Error " + e.code + ": " + e.message)
-}
-```
 
 ---
 
@@ -759,15 +711,9 @@ print("Name:", name, "Age:", age)
 
 // 格式化输出
 printf("Value: %d, Text: %s\n", 42, "test")
+
 ```
-
-### 输入
-
-```vix
-let name = input("Enter your name: ")
-print("Hello, " + name)
-```
-
+notes:printf需要extern "C" {fn printf(fmt:ptr,...): i32}
 ---
 
 ## 全局变量

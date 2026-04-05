@@ -489,18 +489,6 @@ let tab = new_table:[Type]()
 struct SymbolTable:[T] { ... }
 let tab = new_table:[Type]()
 ```
-## 数据转换
-
-Vix 提供内置函数进行类型转换。
-
-### 字符串转数字
-
-```vix
-// 字符串转整数
-let num = toint("123")      // 123 (i32)
-
-// 字符串转浮点数
-let float = tofloat("3.14") // 3.14 (f64)
 ```
 
 ### 数字类型转换
@@ -520,20 +508,6 @@ let ptr: ptr = malloc(100)
 let intPtr: &i32 = ptr  // 通用指针转特定类型指针
 ```
 
----
-
-## 类型别名
-
-使用 `type` 关键字定义类型别名：
-
-```vix
-type Age = i32
-type Name = string
-type Point = [f64 * 2]
-
-let age: Age = 25
-let name: Name = "Alice"
-let point: Point = [1.0, 2.0]
 ```
 
 ---
@@ -577,4 +551,3 @@ process(x)  // i32 可以传递给 i64 参数
 
 - [函数详解](functions.md) - 了解函数和类型的关系
 - [结构体](structs.md) - 深入学习结构体类型
-- [泛型](#泛型类型) - 更多泛型使用示例

@@ -1,10 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
-#include <setjmp.h>
-#include "../include/ast.h"
-#include "../include/vic-ir/mir.h"
+#include "../../include/ast.h"
+#include "../../include/vic-ir/mir.h"
 
 typedef struct {
     char** strings;
@@ -665,7 +663,7 @@ void generate_statement(ConstantPool* pool, ASTNode* node, FILE* fp) {
             int current_reg = reg_counter++;
             fprintf(fp, "    r%d = load_name %s\n", current_reg, node->data.for_stmt.var->data.identifier.name);
             int cmp_reg = reg_counter++;
-            fprintf(fp, "    r%d = le r%d, r%d\n", cmp_reg, current_reg, end_reg);
+            fprintf(fp, "    r%d = lt r%d, r%d\n", cmp_reg, current_reg, end_reg);
             fprintf(fp, "    jmp_if_false r%d, @L%d\n", cmp_reg, loop_end);
             fprintf(fp, "    jmp @L%d\n", loop_body);
             

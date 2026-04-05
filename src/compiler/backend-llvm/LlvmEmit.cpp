@@ -1,8 +1,8 @@
 /*
 vix0.0.1 released!
 */
-#include "../include/llvm_emit.h"
-#include "../include/ast.h"
+#include "../../../include/llvm_emit.h"
+#include "../../../include/ast.h"
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/LLVMContext.h>
@@ -23,6 +23,7 @@ vix0.0.1 released!
 #include <iostream>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 
 using namespace llvm;
@@ -2769,8 +2770,8 @@ public:
         builder.SetInsertPoint(condBB);
         Value* cur_val = builder.CreateLoad(Type::getInt32Ty(context), var_alloc, var_name);
         Value* descending = builder.CreateICmpSGT(start_val_casted, end_val_casted, "for_desc");
-        Value* ascCond = builder.CreateICmpSLE(cur_val, end_val_casted, "forcond_asc");
-        Value* descCond = builder.CreateICmpSGE(cur_val, end_val_casted, "forcond_desc");
+        Value* ascCond = builder.CreateICmpSLT(cur_val, end_val_casted, "forcond_asc");
+        Value* descCond = builder.CreateICmpSGT(cur_val, end_val_casted, "forcond_desc");
         Value* cond = builder.CreateSelect(descending, descCond, ascCond, "forcond");
         VIX_DEBUG_LOG << "[DEBUG] for cond direction-aware (ascending/descending)\n";
         func->insert(func->end(), loopBB);
