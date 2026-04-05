@@ -5,7 +5,6 @@ __pycache__
 *.gch
 *.pch
 t*.cpp
-a.out
 *.out
 .vscode
 *.spec
